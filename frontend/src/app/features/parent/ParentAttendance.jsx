@@ -75,7 +75,12 @@ const ParentAttendance = () => {
     const fetchHistory = async () => {
       const studentId = childInfo?.studentId;
       const schoolId = childInfo?.schoolId;
-      if (!studentId || !schoolId || schoolId === 'explore-schools') return;
+      // Only the school is needed: for a parent the server resolves which children are
+      // theirs and `studentId` merely narrows that. Requiring one here meant a parent
+      // whose stored identity had no studentId — routine right after login, and the
+      // page never re-read it — saw a permanently empty attendance history, while the
+      // homework page (which never required it) worked fine for the same account.
+      if (!schoolId || schoolId === 'explore-schools') return;
 
       setLoading(true);
       setError('');

@@ -3,8 +3,17 @@ import { submitAssignment, getStudentHomework } from './lmsApi';
 
 const extractRecords = (response) => response.data?.data?.records || [];
 
-export const getAttendanceHistory = async (schoolId, params = {}) => {
-  const response = await apiClient.get(`/schools/${schoolId}/attendance/history`, { params });
+/**
+ * A parent's attendance records. `studentId` only narrows the result — the server
+ * already resolves which children belong to this parent — so a missing or stale one is
+ * dropped rather than sent: the API rejects anything that is not an ObjectId, which
+ * turned the whole attendance page into a 400 for parents whose stored id had gone bad.
+ */
+export const getAttendanceHistory = async (schoolId, { studentId, ...params } = {}) => {
+  const id = asObjectId(studentId);
+  const response = await apiClient.get(`/schools/${schoolId}/attendance/history`, {
+    params: id ? { ...params, studentId: id } : params,
+  });
   return {
     data: extractRecords(response),
     pagination: response.data?.pagination || null,
