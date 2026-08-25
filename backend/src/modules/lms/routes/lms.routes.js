@@ -169,7 +169,7 @@ router.get(
   '/:schoolId/lms/courses/:courseId/assignments',
   ...withLms(lmsRead),
   validateParams(validators.courseIdParam),
-  validateQuery(validators.paginationQuery),
+  validateQuery(validators.assignmentListQuery),
   lmsController.listAssignments
 );
 router.post(
@@ -238,7 +238,7 @@ router.patch(
 router.get(
   '/:schoolId/lms/assignments',
   ...withLms(lmsRead),
-  validateQuery(validators.paginationQuery),
+  validateQuery(validators.assignmentListQuery),
   lmsController.listAssignments
 );
 router.post(

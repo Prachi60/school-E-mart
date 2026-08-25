@@ -67,8 +67,18 @@ export const createAssignment = async (schoolId, courseIdOrPayload, payloadArg) 
   return unwrapData(response)?.assignment;
 };
 
+// Both of these are called in two shapes — (schoolId, assignmentId, ...) for homework
+// that hangs off no course, and (schoolId, courseId, assignmentId, ...) for homework
+// that does. Choosing the shape on argument count alone was not enough: homework set
+// from the teacher app has no course, so callers that always pass a courseId slot sent
+// a literal `/courses/undefined/...`, which fails param validation with a 400. The
+// course-scoped path is taken only when there is an actual course id to put in it —
+// the same guard submitAssignment and evaluateSubmission already apply.
 export const updateAssignment = async (schoolId, courseIdOrAssignmentId, assignmentIdOrPayload, payloadArg) => {
   if (payloadArg !== undefined) {
+    if (!courseIdOrAssignmentId) {
+      return updateDirectAssignment(schoolId, assignmentIdOrPayload, payloadArg);
+    }
     const response = await apiClient.patch(
       lmsPath(schoolId, `/courses/${courseIdOrAssignmentId}/assignments/${assignmentIdOrPayload}`),
       payloadArg
@@ -80,6 +90,9 @@ export const updateAssignment = async (schoolId, courseIdOrAssignmentId, assignm
 
 export const deleteAssignment = async (schoolId, courseIdOrAssignmentId, optionalAssignmentId) => {
   if (optionalAssignmentId) {
+    if (!courseIdOrAssignmentId) {
+      return deleteDirectAssignment(schoolId, optionalAssignmentId);
+    }
     const response = await apiClient.delete(
       lmsPath(schoolId, `/courses/${courseIdOrAssignmentId}/assignments/${optionalAssignmentId}`)
     );

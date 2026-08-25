@@ -15,6 +15,20 @@ const paginationQuery = Joi.object({
   search: Joi.string().trim().max(120).optional(),
 });
 
+// Listing homework is always scoped to a class, a section, a subject or a status —
+// none of which paginationQuery declares. Because validation runs with
+// `stripUnknown: true`, sending them against the bare pagination schema dropped every
+// one of them without an error: the teacher's list silently answered with the whole
+// school's homework (drafts and other grades included), and the controller's ownership
+// check, which reads req.query.classGrade, had nothing left to refuse.
+const assignmentListQuery = paginationQuery.keys({
+  courseId: objectId.optional(),
+  classGrade: Joi.string().trim().max(40).optional(),
+  section: Joi.string().trim().max(20).optional(),
+  subject: Joi.string().trim().max(100).optional(),
+  status: Joi.string().valid('draft', 'published', 'archived').optional(),
+});
+
 const schoolIdParam = Joi.object({ schoolId: objectId.required() });
 const courseIdParam = schoolIdParam.keys({ courseId: objectId.required() });
 const chapterIdParam = courseIdParam.keys({ chapterId: objectId.required() });
@@ -217,6 +231,7 @@ const studentIdQuerySchema = Joi.object({
 
 module.exports = {
   paginationQuery,
+  assignmentListQuery,
   schoolIdParam,
   courseIdParam,
   chapterIdParam,

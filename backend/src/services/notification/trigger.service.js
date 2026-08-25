@@ -463,11 +463,15 @@ const triggerService = {
       const recipientUserIds = [...new Set([...parentUserIds, ...studentUserIds])];
       if (!recipientUserIds.length) return;
 
-      const subject = course?.subject || 'Homework';
+      // The assignment carries its own subject since homework stopped hanging off a
+      // course, so reading the course first titled every course-less homework — i.e.
+      // everything the teacher app sets — "New Homework Homework" instead of naming
+      // the subject. With neither, the subject is left out rather than repeated.
+      const subject = assignment.subject || course?.subject || null;
       await notificationService.sendToUsers(recipientUserIds, {
         type: 'homework',
         notification: {
-          title: `New ${subject} Homework`,
+          title: subject ? `New ${subject} Homework` : 'New Homework',
           body: assignment.title || 'New homework has been assigned.',
         },
         data: {

@@ -173,11 +173,52 @@ const assignmentService = {
     const filter = { schoolId };
     if (courseId) filter.courseId = courseId;
     if (query.status) filter.status = query.status;
-    if (query.classGrade) filter.classGrade = query.classGrade;
-    if (query.section) filter.section = query.section;
     if (query.subject) filter.subject = query.subject;
 
-    return assignmentRepository.paginateAssignments(filter, query);
+    // classGrade and section are free text ("5" / "Class 5", "A" / "Section A"), so
+    // matching the raw string would drop the homework a teacher had just filed for the
+    // very class they are looking at. Both are resolved the way the parent feed does
+    // it: read the spellings the school has actually used and match on the normalized
+    // form. `classGrades` is the plural form the controller uses to scope a teacher to
+    // their own classes when they ask for no class in particular.
+    const requestedGrades = Array.isArray(query.classGrades)
+      ? query.classGrades
+      : query.classGrade
+        ? [query.classGrade]
+        : null;
+
+    if (requestedGrades) {
+      const targets = new Set(requestedGrades.map(normalizeGrade).filter(Boolean));
+      const spellings = await assignmentRepository.distinctClassGrades({ schoolId });
+      filter.classGrade = {
+        $in: spellings.filter((value) => value != null && targets.has(normalizeGrade(value))),
+      };
+    }
+
+    if (query.section) {
+      const target = normalizeSection(query.section);
+      const spellings = await assignmentRepository.distinctSections({ schoolId });
+      // Homework filed with no section is set for the whole grade, so it belongs to
+      // every section rather than to none — the same rule the roster and the parent
+      // feed apply. `{ section: null }` matches a missing field as well as a null one.
+      filter.$or = [
+        { section: { $in: spellings.filter((value) => value && normalizeSection(value) === target) } },
+        { section: null },
+        { section: '' },
+      ];
+    }
+
+    // Only paging and sorting are forwarded. executePaginatedQuery runs every other
+    // query key back through ApiFeatures.filter as a raw equality match, which would
+    // AND an exact `classGrade: 'Class 5'` on top of the normalized filter built above
+    // and undo it — and skew the page totals with it, since countDocuments never sees
+    // that second filter.
+    return assignmentRepository.paginateAssignments(filter, {
+      page: query.page,
+      limit: query.limit,
+      sort: query.sort,
+      fields: query.fields,
+    });
   },
 
   async getAssignment(schoolId, courseIdArg, assignmentIdArg) {
@@ -440,9 +481,17 @@ const assignmentService = {
    */
   async getSubmissionRoster(schoolId, courseId, assignmentId) {
     const assignment = await this.getAssignment(schoolId, courseId, assignmentId);
-    const course = await courseService.getCourse(schoolId, courseId, COURSE_SCOPE);
+    let course = null;
+    const effectiveCourseId = courseId || assignment.courseId;
+    if (effectiveCourseId) {
+      try {
+        course = await courseService.getCourse(schoolId, effectiveCourseId, COURSE_SCOPE);
+      } catch {
+        course = null;
+      }
+    }
 
-    const classGrade = assignment.classGrade || course.gradeClass;
+    const classGrade = assignment.classGrade || course?.gradeClass;
     const students = await Student.find({
       schoolId,
       status: 'active',

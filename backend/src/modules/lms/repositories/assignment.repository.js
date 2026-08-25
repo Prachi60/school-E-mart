@@ -49,6 +49,17 @@ class AssignmentRepository extends BaseRepository {
   distinctClassGrades(filter) {
     return LmsAssignment.distinct('classGrade', this.mergeFilter(filter));
   }
+
+  /**
+   * The section strings a school has actually filed homework under.
+   *
+   * Same reasoning as distinctClassGrades: section is free text ("A", "a",
+   * "Section A"), so the only way to narrow a query on it is to match the normalized
+   * form against the spellings that exist. One entry per section the school teaches.
+   */
+  distinctSections(filter) {
+    return LmsAssignment.distinct('section', this.mergeFilter(filter));
+  }
 }
 
 class AssignmentSubmissionRepository extends BaseRepository {

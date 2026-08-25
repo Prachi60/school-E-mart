@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const assignmentService = require('../../src/modules/lms/services/assignment.service');
 const courseService = require('../../src/modules/lms/services/course.service');
+const lmsController = require('../../src/modules/lms/controllers/lms.controller');
+const { ROLES } = require('../../src/constants/roles');
+const TeacherProfile = require('../../src/database/models/TeacherProfile');
 const School = require('../../src/database/models/School');
 const Student = require('../../src/database/models/Student');
 const ChildProfile = require('../../src/database/models/ChildProfile');
@@ -169,6 +172,29 @@ describe('homework flow: assign -> submit -> grade -> return', () => {
     expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.submission === null)).toBe(true);
     expect(rows.map((row) => row.student.name).sort()).toEqual(['Asha', 'Bilal']);
+  });
+
+  test('the roster works for direct homework created without a courseId', async () => {
+    const directAssignment = await assignmentService.createAssignment(
+      schoolId,
+      null,
+      {
+        title: 'Direct Math Homework',
+        classGrade: 'Class 5',
+        section: 'A',
+        status: 'published',
+      },
+      { userId: teacherUserId }
+    );
+
+    const { rows } = await assignmentService.getSubmissionRoster(
+      schoolId,
+      null,
+      directAssignment._id
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].student.name).toBe('Asha');
   });
 
   test('an oversized or unsupported file is reported, never silently dropped', async () => {
@@ -392,6 +418,150 @@ describe('homework flow: assign -> submit -> grade -> return', () => {
       const assignment = await createHomework({ files: [PNG_DATA_URI] });
       expect(assignment.bannerAttachmentId).toBeFalsy();
       expect(assignment.attachments).toHaveLength(1);
+    });
+  });
+
+  /**
+   * Reading the work back. The teacher who set the homework has to be able to open what
+   * the student handed in: this endpoint used to run assertManageAccess, which guards
+   * Learning Hub *authoring* and admits super admins only, behind a course lookup that
+   * course-less homework could never satisfy. Both refusals were swallowed by the UI,
+   * so the file tiles simply span forever.
+   */
+  describe('opening submitted work as staff', () => {
+    const streamAs = (auth, attachmentId) => {
+      const req = { schoolId: String(schoolId), params: { attachmentId }, auth };
+      // A real writable stands in for the response so fs.createReadStream().pipe(res)
+      // has somewhere to go; headers are captured off it.
+      const res = new (require('stream').Writable)({ write: (c, e, cb) => cb() });
+      res.headers = {};
+      res.setHeader = (key, value) => { res.headers[key] = value; };
+      return new Promise((resolve, reject) => {
+        lmsController.streamSubmissionAttachment(req, res, reject);
+        res.on('finish', () => resolve(res));
+        res.on('error', reject);
+      });
+    };
+
+    const submitWork = async (assignment) => {
+      const submission = await assignmentService.submitAssignment(
+        parentReq(studentA), schoolId, assignment.courseId, assignment._id, { files: [PNG_DATA_URI] }
+      );
+      return String(submission.attachments[0]);
+    };
+
+    beforeEach(async () => {
+      await TeacherProfile.create({
+        userId: teacherUserId,
+        schoolId,
+        approvalStatus: 'approved',
+        classAssignments: [{ class: 'Class 5', section: 'A', subjects: ['Mathematics'] }],
+      });
+    });
+
+    test('the teacher who set course-less homework can open the submitted file', async () => {
+      const assignment = await assignmentService.createAssignment(
+        schoolId,
+        null,
+        { title: 'Direct HW', classGrade: 'Class 5', section: 'A', subject: 'Mathematics', status: 'published' },
+        { userId: teacherUserId }
+      );
+      const attachmentId = await submitWork(assignment);
+
+      const res = await streamAs({ role: ROLES.TEACHER, userId: teacherUserId }, attachmentId);
+      expect(res.headers['Content-Type']).toBe('image/png');
+      // Student work must never be held by a shared cache.
+      expect(res.headers['Cache-Control']).toBe('private, no-store');
+    });
+
+    test('a teacher not assigned to that class is still refused', async () => {
+      const assignment = await assignmentService.createAssignment(
+        schoolId,
+        null,
+        { title: 'Direct HW', classGrade: 'Class 5', section: 'A', subject: 'Mathematics', status: 'published' },
+        { userId: teacherUserId }
+      );
+      const attachmentId = await submitWork(assignment);
+
+      const strangerId = new mongoose.Types.ObjectId();
+      await TeacherProfile.create({
+        userId: strangerId,
+        schoolId,
+        approvalStatus: 'approved',
+        classAssignments: [{ class: 'Class 9', section: 'C', subjects: ['History'] }],
+      });
+
+      await expect(
+        streamAs({ role: ROLES.TEACHER, userId: strangerId }, attachmentId)
+      ).rejects.toMatchObject({ code: 'LMS_COURSE_NOT_ASSIGNED' });
+    });
+
+    test('homework that does hang off a course is still readable by its teacher', async () => {
+      const assignment = await createHomework({ subject: 'Mathematics' });
+      const attachmentId = await submitWork(assignment);
+
+      const res = await streamAs({ role: ROLES.TEACHER, userId: teacherUserId }, attachmentId);
+      expect(res.headers['Content-Type']).toBe('image/png');
+    });
+  });
+
+  /**
+   * The teacher's Manage/Check Homework lists. These filters used to be dropped before
+   * they ever reached the query — the list schema did not declare them and validation
+   * strips what it does not know — so a teacher asking for one class was answered with
+   * the whole school's homework, drafts and other grades included.
+   */
+  describe('listing homework for one class', () => {
+    const direct = (payload) =>
+      assignmentService.createAssignment(
+        schoolId,
+        null,
+        { status: 'published', ...payload },
+        { userId: teacherUserId }
+      );
+
+    const titles = async (query) => {
+      const { data } = await assignmentService.listAssignments(schoolId, null, query);
+      return data.map((row) => row.title).sort();
+    };
+
+    test('scopes to the requested class, matching on the normalized grade', async () => {
+      await direct({ title: 'Five Spelled Out', classGrade: 'Class 5' });
+      await direct({ title: 'Five Bare', classGrade: '5' });
+      await direct({ title: 'Other Grade', classGrade: 'Class 6' });
+
+      // "5" and "Class 5" are one class, however each row happens to be spelled.
+      expect(await titles({ classGrade: '5' })).toEqual(['Five Bare', 'Five Spelled Out']);
+      expect(await titles({ classGrade: 'Class 5' })).toEqual(['Five Bare', 'Five Spelled Out']);
+      expect(await titles({ classGrade: 'Class 6' })).toEqual(['Other Grade']);
+    });
+
+    test('a section filter keeps whole-grade homework and excludes other sections', async () => {
+      await direct({ title: 'For A', classGrade: '5', section: 'A' });
+      await direct({ title: 'For B', classGrade: '5', section: 'B' });
+      await direct({ title: 'Whole Grade', classGrade: '5' });
+
+      // Homework with no section is set for the entire grade, so it belongs to A too.
+      expect(await titles({ classGrade: '5', section: 'A' })).toEqual(['For A', 'Whole Grade']);
+      // Section is free text, so 'Section A' and 'a' name the same section as 'A'.
+      expect(await titles({ classGrade: '5', section: 'Section A' })).toEqual(['For A', 'Whole Grade']);
+    });
+
+    test('drafts are excluded when the caller asks for published homework', async () => {
+      await direct({ title: 'Live', classGrade: '5' });
+      await direct({ title: 'Draft', classGrade: '5', status: 'draft' });
+
+      expect(await titles({ classGrade: '5', status: 'published' })).toEqual(['Live']);
+      expect(await titles({ classGrade: '5' })).toEqual(['Draft', 'Live']);
+    });
+
+    test('classGrades scopes a teacher who named no class to their own classes', async () => {
+      await direct({ title: 'Mine', classGrade: 'Class 5' });
+      await direct({ title: 'Theirs', classGrade: 'Class 6' });
+
+      expect(await titles({ classGrades: ['5'] })).toEqual(['Mine']);
+      // A teacher assigned to nothing lists nothing — never the whole school.
+      expect(await titles({ classGrades: [] })).toEqual([]);
     });
   });
 });

@@ -194,6 +194,7 @@ const lmsController = {
   }),
 
   listAssignments: asyncHandler(async (req, res) => {
+    const query = { ...req.query };
     if (req.params.courseId) {
       const course = await withCourse(req);
       await assertTeacherCourseAccess(req, course);
@@ -202,11 +203,21 @@ const lmsController = {
         classGrade: req.query.classGrade,
         subject: req.query.subject,
       });
+      // A teacher who names no class must not be handed the whole school's homework:
+      // with no grade to check, the assertion above has nothing it can refuse. Scope
+      // the listing to the classes on their own profile instead, which is what it
+      // would have enforced had a class been named. An empty array is meaningful — a
+      // teacher assigned to nothing lists nothing — so it is passed through as-is.
+      if (!req.query.classGrade) {
+        query.classGrades = (req.teacherProfile?.classAssignments || [])
+          .map((assignment) => assignment.class)
+          .filter(Boolean);
+      }
     }
     const { data, pagination } = await assignmentService.listAssignments(
       req.schoolId,
       req.params.courseId || null,
-      req.query
+      query
     );
     return paginated(res, { assignments: data }, pagination, 'Assignments fetched successfully', req);
   }),
@@ -418,7 +429,7 @@ const lmsController = {
     );
 
     // A parent may only read their own child's work or homework attachments that are published.
-    // Staff go through the same course manage check that guards the rest of the grading surface.
+    // Staff go through the same class + subject check as the rest of the grading surface.
     if (req.auth.role === ROLES.PARENT) {
       if (isHomeworkAttachment) {
         if (assignment.status !== 'published') {
@@ -430,8 +441,26 @@ const lmsController = {
         }
       }
     } else {
-      const course = await assertCourseInSchool(req.schoolId, assignment.courseId);
-      await assertManageAccess(req, course);
+      // Homework no longer has to hang off a course, so this must not be gated on one:
+      // requiring a course 404'd every course-less homework, and assertManageAccess
+      // guards Learning Hub authoring (super admin only) rather than grading, so it
+      // refused the very teachers who set the work. The grade/subject assertion is the
+      // same one evaluate, return, roster and listSubmissions already use; it is a
+      // no-op for school admins and super admins, and the route guard admits no one
+      // else. Cross-school reads are already blocked: getAttachmentContext resolves the
+      // assignment within req.schoolId, which is pinned to the caller's own tenant.
+      let course = null;
+      if (assignment.courseId) {
+        try {
+          course = await assertCourseInSchool(req.schoolId, assignment.courseId);
+        } catch {
+          course = null;
+        }
+      }
+      await assertTeacherAssignmentAccess(req, {
+        classGrade: assignment.classGrade || course?.gradeClass,
+        subject: assignment.subject || course?.subject,
+      });
     }
 
     const absolutePath = resolvePrivatePath(attachment.storageKey);

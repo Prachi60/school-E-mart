@@ -174,7 +174,7 @@ const TeacherCheckHomework = () => {
   const [feedbackRemarks, setFeedbackRemarks] = useState('');
   const [showToast, setShowToast] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'Submitted', 'Not Submitted', 'Checked'
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'Submitted' | 'Checked' | 'Returned' | 'Not Submitted'
 
   // Full image preview state
   const [previewImageUrl, setPreviewImageUrl] = useState(null);
@@ -231,10 +231,14 @@ const TeacherCheckHomework = () => {
     return sub.status === statusFilter;
   });
 
-  // Dynamic status counters
+  // Dynamic status counters. Every status a roster row can carry needs a tile of its
+  // own: 'Returned' had none, so work sent back for revision — the rows most needing a
+  // follow-up — was counted nowhere, left the four tiles not adding up to the total,
+  // and vanished the moment any tile was used as a filter.
   const totalSubmissions = activeSubmissionsList.length;
   const submittedCount = activeSubmissionsList.filter(s => s.status === 'Submitted').length;
   const checkedCount = activeSubmissionsList.filter(s => s.status === 'Checked').length;
+  const returnedCount = activeSubmissionsList.filter(s => s.status === 'Returned').length;
   const pendingCount = activeSubmissionsList.filter(s => s.status === 'Not Submitted').length;
 
   const handleOpenCheckPanel = (student) => {
@@ -480,7 +484,7 @@ const TeacherCheckHomework = () => {
       )}
 
       {/* 4. Stat Cards Grid for Submissions */}
-      <div className="px-6 mt-4 grid grid-cols-4 gap-2 shrink-0">
+      <div className="px-6 mt-4 grid grid-cols-5 gap-1.5 shrink-0">
         {/* Total Card */}
         <button 
           onClick={() => setStatusFilter('all')}
@@ -523,8 +527,22 @@ const TeacherCheckHomework = () => {
           <span className="text-[8px] text-gray-400 font-bold mt-1 uppercase tracking-tight">Checked</span>
         </button>
 
+        {/* Returned Card */}
+        <button
+          onClick={() => setStatusFilter('Returned')}
+          className={`bg-white rounded-2xl p-2.5 flex flex-col items-center justify-center text-center shadow-sm transition-all duration-200 outline-none border ${
+            statusFilter === 'Returned'
+              ? 'border-[#F2994A] ring-2 ring-[#F2994A]/20 scale-105 font-black shadow-md shadow-orange-100'
+              : 'border-gray-200 opacity-80 hover:opacity-100 scale-95'
+          }`}
+        >
+          <RotateCcw size={16} className="text-[#F2994A]" />
+          <span className="text-sm font-black text-deep-purple mt-1.5 leading-none">{returnedCount}</span>
+          <span className="text-[8px] text-gray-400 font-bold mt-1 uppercase tracking-tight">Returned</span>
+        </button>
+
         {/* Not Submitted Card */}
-        <button 
+        <button
           onClick={() => setStatusFilter('Not Submitted')}
           className={`bg-white rounded-2xl p-2.5 flex flex-col items-center justify-center text-center shadow-sm transition-all duration-200 outline-none border ${
             statusFilter === 'Not Submitted' 

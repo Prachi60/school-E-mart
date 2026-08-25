@@ -94,6 +94,7 @@ const progressService = {
   },
 
   async recalculateCourseProgress(userId, schoolId, courseId, studentId) {
+    if (!courseId) return null;
     const progress = await this.getCourseProgress(userId, courseId);
 
     const assignments = await LmsAssignment.find({
