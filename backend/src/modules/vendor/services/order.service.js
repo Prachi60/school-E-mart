@@ -3,7 +3,11 @@ const orderRepository = require('../repositories/order.repository');
 const vendorAccessPolicy = require('../policies/vendorAccess.policy');
 const Order = require('../../../database/models/Order');
 const { triggerService } = require('../../../services/notification');
+const { AWAITING_PAYMENT } = require('../../orders/utils/statusMachine');
 
+// 'pending_payment' is deliberately absent: an unpaid online order is not the vendor's
+// to work on, so every transition out of it is refused here as well as being hidden
+// from the vendor's list and order lookup below.
 const VENDOR_TRANSITIONS = {
   placed: ['accepted', 'cancelled'],
   accepted: ['processed', 'cancelled'],
@@ -16,7 +20,12 @@ const VENDOR_TRANSITIONS = {
 const vendorOrderService = {
   listOrders(vendorId, query) {
     const filter = {};
-    if (query.status) filter.orderStatus = query.status;
+    // A vendor must never be shown an order that has not been paid for — it would put
+    // stock aside and start packing against money that may never arrive.
+    filter.orderStatus =
+      query.status && query.status !== AWAITING_PAYMENT
+        ? query.status
+        : { $ne: AWAITING_PAYMENT };
     if (query.from || query.to) {
       filter['audit.createdAt'] = {};
       if (query.from) filter['audit.createdAt'].$gte = new Date(query.from);
@@ -25,12 +34,23 @@ const vendorOrderService = {
     if (query.search) {
       filter.orderNumber = { $regex: query.search, $options: 'i' };
     }
-    return orderRepository.paginateVendorOrders(vendorId, query, filter);
+    // Only paging and sorting are forwarded. The paginator runs every other query key
+    // back through ApiFeatures.filter as a raw top-level equality match, and an Order
+    // has no top-level `status`, `from` or `to` field — so passing the whole query
+    // through ANDed `{ status: 'placed' }` onto the filter built above and the vendor's
+    // filtered list came back empty every time.
+    const { page, limit, sort, fields } = query;
+    return orderRepository.paginateVendorOrders(vendorId, { page, limit, sort, fields }, filter);
   },
 
   async getOrder(vendorId, orderId) {
     const order = await orderRepository.findVendorOrder(vendorId, orderId);
     if (!order) throw new NotFoundError('Order not found', 'ORDER_NOT_FOUND');
+    // Unpaid online orders do not exist as far as a vendor is concerned, so knowing an
+    // id is not a way around the list filter above.
+    if (order.orderStatus === AWAITING_PAYMENT) {
+      throw new NotFoundError('Order not found', 'ORDER_NOT_FOUND');
+    }
 
     const vendorItems = order.items.filter((item) => String(item.vendorId) === String(vendorId));
     return { ...order, vendorItems };

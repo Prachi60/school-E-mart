@@ -232,7 +232,14 @@ const CheckoutPage = () => {
           razorpaySignature: razorpayResponse.razorpay_signature,
         });
       } else if (paymentMethod === 'online') {
-        await confirmPayment(order._id);
+        // No gateway order came back, so there is nothing for the customer to pay
+        // through and no payment to confirm. This used to call confirmPayment with an
+        // empty body, which the server accepted — marking the order paid without a
+        // rupee moving. The order stays unpaid (and is released automatically), and
+        // the customer is told to use Cash on Delivery instead.
+        throw new Error(
+          'Online payment is unavailable right now. Please choose Cash on Delivery, or try again later.'
+        );
       }
 
       await refreshCart();

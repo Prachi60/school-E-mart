@@ -104,7 +104,11 @@ const SchoolCheckoutPage = () => {
           razorpaySignature: razorpayResponse.razorpay_signature,
         });
       } else if (paymentMethod === 'online') {
-        await confirmPayment(order._id);
+        // Same rule as the parent checkout: with no gateway order there is no payment
+        // to confirm, and confirming one anyway marked the order paid for free.
+        throw new Error(
+          'Online payment is unavailable right now. Please choose Cash on Delivery, or try again later.'
+        );
       }
 
       await refreshCart();

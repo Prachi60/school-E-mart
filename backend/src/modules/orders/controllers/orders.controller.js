@@ -116,8 +116,14 @@ const ordersController = {
       throw new BadRequestError('Cannot confirm payment for a cancelled order', null, 'ORDER_CANCELLED');
     }
     const payment = await paymentService.confirmPayment(order._id, req.body);
-    await orderService.updatePaymentStatus(order._id, 'paid');
-    return success(res, { payment }, 'Payment confirmed', undefined, req);
+    // Promotes a held online order into a real one — but only after re-reading the
+    // captured total from the Payment collection, so reaching this endpoint is not by
+    // itself enough to make an order fulfilable.
+    const activated = await orderService.activateOrder(order._id);
+    if (activated.orderStatus !== 'pending_payment' && activated.paymentStatus !== 'paid') {
+      await orderService.updatePaymentStatus(order._id, 'paid');
+    }
+    return success(res, { payment, order: activated }, 'Payment confirmed', undefined, req);
   }),
 
   requestRefund: asyncHandler(async (req, res) => {
