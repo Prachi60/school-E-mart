@@ -143,7 +143,10 @@ const TeacherAttendance = () => {
           .map((s) => ({
             studentId: s.mongoId,
             status: mapUiStatusToApi(s.status),
-            remarks: remark || undefined,
+            // Left off entirely when the box is empty, so saving a day does not clear
+            // remarks already recorded against these students. The field applies to
+            // the whole class by design — it is labelled "Class Remark".
+            ...(remark.trim() ? { remarks: remark.trim() } : {}),
           })),
       });
 

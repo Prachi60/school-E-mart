@@ -48,6 +48,64 @@ const getVendorUserIds = async (vendorIds = []) => {
   return profiles.map((p) => p.userId).filter(Boolean);
 };
 
+/**
+ * The same two-link resolution as parentUserIdsForStudents, but kept grouped by student
+ * so a caller notifying a whole class can resolve everyone in one pass.
+ *
+ * Marking a 40-student roster used to call parentUserIdsForStudents once per student —
+ * 120 sequential queries inside the request that marks attendance.
+ *
+ * Returns Map<studentId, string[] of parent userIds>.
+ */
+const parentUserIdsByStudent = async (studentIds) => {
+  const byStudent = new Map((studentIds || []).map((id) => [String(id), new Set()]));
+  if (!studentIds?.length) return byStudent;
+
+  const ChildProfile = require('../../database/models/ChildProfile');
+  const Student = require('../../database/models/Student');
+  const ParentProfile = require('../../database/models/ParentProfile');
+
+  const [children, students] = await Promise.all([
+    ChildProfile.find({
+      studentId: { $in: studentIds },
+      'softDelete.isDeleted': { $ne: true },
+    })
+      .select('studentId parentUserId')
+      .lean(),
+    Student.find({
+      _id: { $in: studentIds },
+      'softDelete.isDeleted': { $ne: true },
+    })
+      .select('parentProfileIds')
+      .lean(),
+  ]);
+
+  children.forEach((child) => {
+    if (!child.parentUserId) return;
+    byStudent.get(String(child.studentId))?.add(String(child.parentUserId));
+  });
+
+  const allProfileIds = students.flatMap((student) => student.parentProfileIds || []).filter(Boolean);
+  if (allProfileIds.length) {
+    const profiles = await ParentProfile.find({
+      _id: { $in: allProfileIds },
+      'softDelete.isDeleted': { $ne: true },
+    })
+      .select('userId')
+      .lean();
+    const userIdByProfile = new Map(profiles.map((p) => [String(p._id), String(p.userId)]));
+
+    students.forEach((student) => {
+      (student.parentProfileIds || []).forEach((profileId) => {
+        const userId = userIdByProfile.get(String(profileId));
+        if (userId) byStudent.get(String(student._id))?.add(userId);
+      });
+    });
+  }
+
+  return new Map([...byStudent].map(([studentId, set]) => [studentId, [...set]]));
+};
+
 const parentUserIdsForStudents = async (studentIds) => {
   if (!studentIds?.length) return [];
 
@@ -775,11 +833,18 @@ const triggerService = {
         year: 'numeric',
       }) : 'Today';
 
+      // Resolved for the whole class up front rather than once per student inside the
+      // loop, which turned marking a 40-student roster into 120 sequential queries.
+      const known = attendanceRecords
+        .filter((record) => studentsById.has(String(record.studentId)))
+        .map((record) => record.studentId);
+      const parentsByStudent = await parentUserIdsByStudent(known);
+
       for (const record of attendanceRecords) {
         const student = studentsById.get(String(record.studentId));
         if (!student) continue;
 
-        const parentUserIds = await parentUserIdsForStudents([record.studentId]);
+        const parentUserIds = parentsByStudent.get(String(record.studentId)) || [];
         const recipientUserIds = [...new Set([...parentUserIds, ...(student.userId ? [String(student.userId)] : [])])];
         if (!recipientUserIds.length) continue;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -39,6 +39,56 @@ const getLocalDateString = (year, month, day) => {
   return `${y}-${m}-${d}`;
 };
 
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// Records are stored against UTC midnight, so every window boundary is built in UTC
+// too — deriving them locally would shift the edge by a day either side.
+const utcDay = (year, month, day) => new Date(Date.UTC(year, month, day));
+
+// How many months of history back the calendar and the Overview tab. The window is
+// pinned to the month on screen rather than to today, so paging back keeps working;
+// 13 covers the widest period either dropdown can ask for ("Last 12 Months") plus the
+// month being viewed.
+const HISTORY_WINDOW_MONTHS = 13;
+
+// How many months each Trend option charts.
+const TREND_MONTHS = { 'Last 6 Months': 6, 'Last 12 Months': 12 };
+
+// The period each Summary option covers, as a [start, end] pair of UTC day bounds,
+// anchored to the month currently on screen.
+const summaryPeriod = (filter, year, month) => {
+  switch (filter) {
+    case 'Last Month':
+      return [utcDay(year, month - 1, 1), utcDay(year, month, 0)];
+    case 'Last 3 Months':
+      return [utcDay(year, month - 2, 1), utcDay(year, month + 1, 0)];
+    // An academic term is not modelled anywhere, so this is the school year to date:
+    // April onwards in the Indian academic calendar.
+    case 'This Term': {
+      const termStartYear = month >= 3 ? year : year - 1;
+      return [utcDay(termStartYear, 3, 1), utcDay(year, month + 1, 0)];
+    }
+    case 'This Month':
+    default:
+      return [utcDay(year, month, 1), utcDay(year, month + 1, 0)];
+  }
+};
+
+// 'holiday' is not a school day and belongs in no percentage of attendance; 'half_day'
+// is counted with 'late' because the calendar has no separate swatch for it.
+const tallyRecords = (records) =>
+  records.reduce(
+    (acc, record) => {
+      if (record.status === 'present') acc.present += 1;
+      else if (record.status === 'late' || record.status === 'half_day') acc.late += 1;
+      else if (record.status === 'absent') acc.absent += 1;
+      else if (record.status === 'leave') acc.leave += 1;
+      else if (record.status === 'holiday') acc.holiday += 1;
+      return acc;
+    },
+    { present: 0, late: 0, absent: 0, leave: 0, holiday: 0 }
+  );
+
 const ParentAttendance = () => {
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
@@ -52,9 +102,6 @@ const ParentAttendance = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  // Backend Integration State Hook for Overview Stats:
-  const [overviewStats, setOverviewStats] = useState(null);
 
   // Dropdown Filter States
   const [showSummaryDropdown, setShowSummaryDropdown] = useState(false);
@@ -70,6 +117,16 @@ const ParentAttendance = () => {
   // hook backfills those from the authenticated user and re-renders when they arrive.
   // Same fix as ParentHomework; this was the last screen still reading it once.
   const childInfo = useChildInfo();
+
+  // The window of history to load, pinned to the month on screen. Paging the calendar
+  // back re-fetches; it used to ask for the 100 most recent records once and never
+  // again, so every month past roughly the fifth rendered blank — indistinguishable
+  // from "nobody marked it" — and the Overview percentages were computed over whatever
+  // that truncated slice happened to contain.
+  const viewYear = currentMonthDate.getFullYear();
+  const viewMonth = currentMonthDate.getMonth();
+  const rangeFrom = getUTCDateString(utcDay(viewYear, viewMonth - (HISTORY_WINDOW_MONTHS - 1), 1));
+  const rangeTo = getUTCDateString(utcDay(viewYear, viewMonth + 1, 0));
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -87,7 +144,11 @@ const ParentAttendance = () => {
       try {
         const { data: fetchedRecords } = await getAttendanceHistory(schoolId, {
           studentId,
-          limit: 100,
+          from: rangeFrom,
+          to: rangeTo,
+          // One record per school day per child, so a 13-month window cannot approach
+          // this. It is a ceiling, not a page size.
+          limit: 500,
         });
         setRecords(fetchedRecords);
       } catch (err) {
@@ -98,74 +159,70 @@ const ParentAttendance = () => {
       }
     };
     fetchHistory();
-  }, [childInfo?.schoolId, childInfo?.studentId]);
+  }, [childInfo?.schoolId, childInfo?.studentId, rangeFrom, rangeTo]);
 
-  useEffect(() => {
-    if (records.length === 0) {
-      setOverviewStats({
-        overallPercentage: 0,
-        presentPercent: 0,
-        absentPercent: 0,
-        latePercent: 0,
-        leavePercent: 0,
-        holidayPercent: 0,
-        presentDays: 0,
-        totalDays: 0,
-        absentDays: 0,
-        lateDays: 0,
-        leaveDays: 0,
-        holidayDays: 0,
-      });
-      return;
-    }
-
-    let presentDays = 0;
-    let absentDays = 0;
-    let lateDays = 0;
-    let leaveDays = 0;
-    let holidayDays = 0;
-
-    records.forEach(r => {
-      // 'late' and 'half_day' are real statuses. Lateness used to be inferred from
-      // remarks text, which the teacher's roster never actually writes.
-      if (r.status === 'present') {
-        presentDays++;
-      } else if (r.status === 'late' || r.status === 'half_day') {
-        lateDays++;
-      } else if (r.status === 'absent') {
-        absentDays++;
-      } else if (r.status === 'leave') {
-        leaveDays++;
-      } else if (r.status === 'holiday') {
-        holidayDays++;
-      }
+  // Scoped to the period the Summary dropdown names. That dropdown used to be inert:
+  // it stored a label and nothing recomputed, so a parent picking "This Month" was
+  // shown lifetime numbers under a "This Month" heading.
+  const overviewStats = useMemo(() => {
+    const [periodStart, periodEnd] = summaryPeriod(summaryFilter, viewYear, viewMonth);
+    const inPeriod = records.filter((record) => {
+      const at = new Date(record.date).getTime();
+      return at >= periodStart.getTime() && at <= periodEnd.getTime();
     });
 
-    const totalDays = presentDays + absentDays + lateDays + leaveDays; // active school/working days
-    const overallCount = records.length; // total records (including holidays)
+    const counts = tallyRecords(inPeriod);
+    // School days only — a holiday is not an attendance opportunity, so counting it in
+    // the denominator quietly depressed every child's percentage.
+    const totalDays = counts.present + counts.absent + counts.late + counts.leave;
+    const pct = (value) => (totalDays > 0 ? Math.round((value / totalDays) * 100) : 0);
 
-    const overallPercentage = totalDays > 0 ? Math.round(((presentDays + lateDays) / totalDays) * 100) : 0;
-    const presentPercent = overallCount > 0 ? Math.round((presentDays / overallCount) * 100) : 0;
-    const absentPercent = overallCount > 0 ? Math.round((absentDays / overallCount) * 100) : 0;
-    const latePercent = overallCount > 0 ? Math.round((lateDays / overallCount) * 100) : 0;
-    const leavePercent = overallCount > 0 ? Math.round((leaveDays / overallCount) * 100) : 0;
-    const holidayPercent = overallCount > 0 ? Math.round((holidayDays / overallCount) * 100) : 0;
-
-    setOverviewStats({
-      overallPercentage,
-      presentPercent,
-      absentPercent,
-      latePercent,
-      leavePercent,
-      holidayPercent,
-      presentDays,
+    return {
+      overallPercentage: pct(counts.present + counts.late),
+      presentPercent: pct(counts.present),
+      absentPercent: pct(counts.absent),
+      latePercent: pct(counts.late),
+      leavePercent: pct(counts.leave),
+      // Holidays sit outside the school-day denominator, so they are reported as a
+      // count rather than as a share of attendance.
+      holidayPercent: 0,
+      presentDays: counts.present,
       totalDays,
-      absentDays,
-      lateDays,
-      leaveDays,
-      holidayDays,
+      absentDays: counts.absent,
+      lateDays: counts.late,
+      leaveDays: counts.leave,
+      holidayDays: counts.holiday,
+      periodLabel: summaryFilter,
+    };
+  }, [records, summaryFilter, viewYear, viewMonth]);
+
+  // One stacked bar per month, computed from the records actually on hand. This chart
+  // was six hardcoded bars labelled Dec–May with fixed percentages — identical for
+  // every parent, and never the last six months.
+  const trendMonths = useMemo(() => {
+    const span = TREND_MONTHS[trendFilter] || viewMonth + 1; // 'This Year' → Jan..viewMonth
+    return Array.from({ length: span }, (_, index) => {
+      const offset = span - 1 - index;
+      const start = utcDay(viewYear, viewMonth - offset, 1);
+      const end = utcDay(viewYear, viewMonth - offset + 1, 0);
+      const counts = tallyRecords(
+        records.filter((record) => {
+          const at = new Date(record.date).getTime();
+          return at >= start.getTime() && at <= end.getTime();
+        })
+      );
+      const total = counts.present + counts.absent + counts.late + counts.leave;
+      const share = (value) => (total > 0 ? Math.round((value / total) * 100) : 0);
+      return {
+        label: MONTH_LABELS[start.getUTCMonth()],
+        hasData: total > 0,
+        present: share(counts.present),
+        late: share(counts.late),
+        absent: share(counts.absent),
+        leave: share(counts.leave),
+      };
     });
-  }, [records]);
+  }, [records, trendFilter, viewYear, viewMonth]);
 
   // Create a recordMap for quick lookup
   const recordMap = {};
@@ -244,7 +301,12 @@ const ParentAttendance = () => {
     });
   }
 
-  // Helper to retrieve details for currently selected day
+  // Helper to retrieve details for currently selected day.
+  //
+  // `timeText` describes the status, never a clock time: an attendance record carries a
+  // date and nothing finer, so the "Marked at 09:15 AM" / "Delayed by 15 minutes" lines
+  // that used to sit here were invented and shown to parents as fact. Likewise the note
+  // falls back to "no remarks" rather than inventing a reason for the absence.
   const getSelectedDayDetails = () => {
     const selYear = selectedDate.getFullYear();
     const selMonth = selectedDate.getMonth();
@@ -265,7 +327,7 @@ const ParentAttendance = () => {
           statusBg: 'bg-[#EBFBF0]',
           icon: <Check size={14} strokeWidth={3.5} className="text-white" />,
           iconWrapperBg: 'bg-[#34A853]',
-          timeText: 'Marked at 09:15 AM',
+          timeText: 'Marked present',
           noteText: remarks || 'No remarks for this date.'
         };
       case 'absent':
@@ -276,8 +338,8 @@ const ParentAttendance = () => {
           statusBg: 'bg-[#FEF3F2]',
           icon: <AlertCircle size={15} className="text-white" />,
           iconWrapperBg: 'bg-[#D93025]',
-          timeText: 'Not Marked / Absent',
-          noteText: remarks || 'Unexcused absence. Please submit leave application.'
+          timeText: 'Marked absent',
+          noteText: remarks || 'No remarks for this date.'
         };
       case 'late':
         return {
@@ -287,8 +349,8 @@ const ParentAttendance = () => {
           statusBg: 'bg-[#FFF6ED]',
           icon: <Clock size={14} className="text-white" />,
           iconWrapperBg: 'bg-[#F2994A]',
-          timeText: 'Marked Late at 09:45 AM',
-          noteText: remarks || 'Delayed by 15 minutes.'
+          timeText: 'Marked late',
+          noteText: remarks || 'No remarks for this date.'
         };
       case 'leave':
         return {
@@ -298,8 +360,8 @@ const ParentAttendance = () => {
           statusBg: 'bg-[#F9F5FF]',
           icon: <FileText size={14} className="text-white" />,
           iconWrapperBg: 'bg-[#7F56D9]',
-          timeText: 'Approved Leave',
-          noteText: remarks || 'Medical leave approved by Principal.'
+          timeText: 'On leave',
+          noteText: remarks || 'No remarks for this date.'
         };
       case 'holiday':
         return {
@@ -309,8 +371,8 @@ const ParentAttendance = () => {
           statusBg: 'bg-[#F9F5FF]',
           icon: <CalendarIcon size={14} className="text-white" />,
           iconWrapperBg: 'bg-[#7F56D9]',
-          timeText: 'School Closed',
-          noteText: remarks || 'Gazetted public holiday / School event day.'
+          timeText: 'School closed',
+          noteText: remarks || 'No remarks for this date.'
         };
       case 'sunday':
         return {
@@ -402,6 +464,31 @@ const ParentAttendance = () => {
             ))}
           </div>
         </div>
+
+        {/* A failed or in-flight load used to render as an ordinary empty calendar —
+            every day blank, with nothing to say whether the records were missing, still
+            arriving, or simply never fetched. Both states are now visible. */}
+        {error ? (
+          <div className="px-6 mt-4">
+            <div className="bg-[#FEF3F2] border border-[#D93025]/10 rounded-2xl p-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-[#D93025]/10 flex items-center justify-center text-[#D93025] shrink-0">
+                <AlertCircle size={18} />
+              </div>
+              <div className="min-w-0">
+                <h5 className="text-[12px] font-black text-[#D93025]">Couldn&apos;t load attendance</h5>
+                <p className="text-[11px] font-bold text-gray-500 leading-normal mt-1">
+                  {error} Pull down or reopen this page to try again.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : loading && records.length === 0 ? (
+          <div className="px-6 mt-4">
+            <div className="bg-white border border-gray-100 rounded-2xl p-4 text-center">
+              <p className="text-[11px] font-bold text-gray-400">Loading attendance…</p>
+            </div>
+          </div>
+        ) : null}
 
         {activeTab === 'Calendar' ? (
           <>
@@ -724,27 +811,25 @@ const ParentAttendance = () => {
                     <span>0%</span>
                   </div>
 
-                  {/* 6 Months Stacked Bars */}
-                  {[
-                    { label: 'Dec', pres: 'h-[65%]', late: 'h-[15%]', abs: 'h-[10%]', leav: 'h-[10%]' },
-                    { label: 'Jan', pres: 'h-[60%]', late: 'h-[18%]', abs: 'h-[12%]', leav: 'h-[10%]' },
-                    { label: 'Feb', pres: 'h-[72%]', late: 'h-[12%]', abs: 'h-[8%]', leav: 'h-[8%]' },
-                    { label: 'Mar', pres: 'h-[70%]', late: 'h-[14%]', abs: 'h-[10%]', leav: 'h-[6%]' },
-                    { label: 'Apr', pres: 'h-[68%]', late: 'h-[16%]', abs: 'h-[10%]', leav: 'h-[6%]' },
-                    { label: 'May', pres: 'h-[65%]', late: 'h-[15%]', abs: 'h-[10%]', leav: 'h-[10%]' }
-                  ].map((item, idx) => (
-                    <div key={idx} className="flex-1 flex flex-col items-center gap-2.5">
+                  {/* One bar per month, from this child's own records. A month with no
+                      marks stays empty rather than borrowing a neighbour's shape. */}
+                  {trendMonths.map((item, idx) => (
+                    <div key={`${item.label}-${idx}`} className="flex-1 flex flex-col items-center gap-2.5">
                       <div className="w-4 bg-gray-50/50 border border-gray-100/50 rounded-full h-36 flex flex-col justify-end overflow-hidden">
-                        {/* Present */}
-                        <span className={`w-full bg-[#34A853] ${item.pres} rounded-t-sm`}></span>
-                        {/* Late */}
-                        <span className={`w-full bg-[#F2994A] ${item.late}`}></span>
-                        {/* Absent */}
-                        <span className={`w-full bg-[#D93025] ${item.abs}`}></span>
-                        {/* Leave */}
-                        <span className={`w-full bg-[#7F56D9] ${item.leav} rounded-b-sm`}></span>
+                        {item.hasData ? (
+                          <>
+                            {/* Present */}
+                            <span className="w-full bg-[#34A853] rounded-t-sm" style={{ height: `${item.present}%` }}></span>
+                            {/* Late */}
+                            <span className="w-full bg-[#F2994A]" style={{ height: `${item.late}%` }}></span>
+                            {/* Absent */}
+                            <span className="w-full bg-[#D93025]" style={{ height: `${item.absent}%` }}></span>
+                            {/* Leave */}
+                            <span className="w-full bg-[#7F56D9] rounded-b-sm" style={{ height: `${item.leave}%` }}></span>
+                          </>
+                        ) : null}
                       </div>
-                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-tight">{item.label}</span>
+                      <span className={`text-[10px] font-black uppercase tracking-tight ${item.hasData ? 'text-gray-400' : 'text-gray-300'}`}>{item.label}</span>
                     </div>
                   ))}
                 </div>
@@ -756,7 +841,9 @@ const ParentAttendance = () => {
                     { label: 'Absent', val: overviewStats ? `${overviewStats.absentPercent}%` : '--%', iconColor: 'text-[#D93025]', bg: 'bg-[#FEF3F2]', border: 'border-[#D93025]/10' },
                     { label: 'Late', val: overviewStats ? `${overviewStats.latePercent}%` : '--%', iconColor: 'text-[#F2994A]', bg: 'bg-[#FFF6ED]', border: 'border-[#F2994A]/10' },
                     { label: 'Leave', val: overviewStats ? `${overviewStats.leavePercent}%` : '--%', iconColor: 'text-[#7F56D9]', bg: 'bg-[#F9F5FF]', border: 'border-[#7F56D9]/10' },
-                    { label: 'Holiday', val: overviewStats ? `${overviewStats.holidayPercent}%` : '--%', iconColor: 'text-[#7F56D9]', bg: 'bg-[#F9F5FF]', border: 'border-[#7F56D9]/10', isH: true }
+                    // A count, not a share: holidays are not school days, so they are
+                    // deliberately outside the percentage denominator above.
+                    { label: 'Holiday', val: overviewStats ? `${overviewStats.holidayDays}` : '--', iconColor: 'text-[#7F56D9]', bg: 'bg-[#F9F5FF]', border: 'border-[#7F56D9]/10', isH: true }
                   ].map((card, idx) => (
                     <div key={idx} className={`rounded-xl p-2.5 border ${card.border} ${card.bg} flex flex-col items-center justify-center text-center shadow-[0_1px_3px_rgba(0,0,0,0.01)]`}>
                       {card.isH ? (

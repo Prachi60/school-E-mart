@@ -259,10 +259,9 @@ const schoolController = {
 
   updateAttendance: asyncHandler(async (req, res) => {
     const record = await attendanceService.updateAttendance(
-      req.schoolId,
+      req,
       req.params.attendanceId,
-      req.body,
-      req.auth.userId
+      req.body
     );
     return success(res, { record }, 'Attendance updated successfully', undefined, req);
   }),

@@ -28,24 +28,15 @@ const findActiveStudentIds = async (schoolId, { classGrade, section } = {}) => {
 
 // A parent may only ever see their own children. Resolves the student ids they own
 // within the current school; an empty list means they see nothing.
-const resolveParentStudentIds = async (req) => {
-  const ParentProfile = require('../../../database/models/ParentProfile');
-  const profile = await ParentProfile.findOne({
-    userId: req.auth.userId,
-    'softDelete.isDeleted': { $ne: true },
-  }).lean();
-
-  if (!profile) {
-    throw new ForbiddenError('You can only access your own children', 'STUDENT_ACCESS_DENIED');
-  }
-
-  const children = await studentRepository.findMany({
-    schoolId: req.schoolId,
-    parentProfileIds: profile._id,
-  });
-
-  return children.map((child) => child._id);
-};
+//
+// Both link types count. Reading only ParentProfile -> Student.parentProfileIds left
+// every parent linked through ChildProfile with an empty attendance page — and, when
+// they had no ParentProfile row at all, a 403 for the whole screen — while the push
+// notification about the very record they were looking for reached them, because
+// notifications resolve both. Having no children here is an ordinary answer, so it
+// scopes the query to nothing rather than failing the request.
+const resolveParentStudentIds = (req) =>
+  studentRepository.findChildStudentIdsForParent(req.schoolId, req.auth.userId);
 
 // Teachers read only the classes they are assigned to. Without a class filter the
 // query would span the whole school, so require one rather than silently widening.
@@ -98,14 +89,21 @@ const attendanceService = {
     const saved = await attendanceRepository.bulkUpsertRecords(
       applicable.map((record) => {
         const studentId = studentsById.get(String(record.studentId))._id;
+        const set = { status: record.status, recordedBy: req.auth.userId };
+
+        // Only touch remarks when the caller actually sent the field. Writing
+        // `record.remarks || null` unconditionally meant every re-save of a day erased
+        // the remarks already on it — and re-saving is routine, because correcting one
+        // student means pressing Save for the whole roster. An explicit empty string
+        // still clears one, so a remark remains removable.
+        if (record.remarks !== undefined) {
+          set.remarks = record.remarks || null;
+        }
+
         return {
           filter: { schoolId, studentId, date: attendanceDate },
           update: {
-            $set: {
-              status: record.status,
-              remarks: record.remarks || null,
-              recordedBy: req.auth.userId,
-            },
+            $set: set,
             $setOnInsert: { schoolId, studentId, date: attendanceDate },
           },
         };
@@ -119,21 +117,40 @@ const attendanceService = {
     return { records: saved, skipped };
   },
 
-  async updateAttendance(schoolId, attendanceId, payload, recordedBy) {
+  async updateAttendance(req, attendanceId, payload) {
+    const schoolId = req.schoolId;
+
+    // Read the record before touching it: correcting one is the same authority as
+    // marking one, and this path had none. A teacher could amend any student's
+    // attendance anywhere in the school by id — including classes they do not teach,
+    // and bypassing the "active in this class" guard markAttendance enforces.
+    const existing = await attendanceRepository.findOne({ _id: attendanceId, schoolId });
+    if (!existing) throw new NotFoundError('Attendance record not found', 'ATTENDANCE_NOT_FOUND');
+
+    const student = await studentRepository.findById(existing.studentId, { schoolId });
+    if (!student) throw new NotFoundError('Attendance record not found', 'ATTENDANCE_NOT_FOUND');
+
+    await assertTeacherClassAccess(req, {
+      classGrade: student.classGrade,
+      section: student.section,
+    });
+
     const updated = await attendanceRepository.updateRecord(
       { _id: attendanceId, schoolId },
-      { $set: { ...payload, recordedBy } }
+      { $set: { ...payload, recordedBy: req.auth.userId } }
     );
 
     if (!updated) throw new NotFoundError('Attendance record not found', 'ATTENDANCE_NOT_FOUND');
 
     if (payload.status) {
-      const student = await studentRepository.findById(updated.studentId);
-      if (student) {
-        const studentsById = new Map([[String(student._id), student]]);
-        const { triggerService } = require('../../../services/notification');
-        triggerService.notifyAttendanceMarked(schoolId, [{ studentId: updated.studentId, status: payload.status }], studentsById, updated.date);
-      }
+      const studentsById = new Map([[String(student._id), student]]);
+      const { triggerService } = require('../../../services/notification');
+      triggerService.notifyAttendanceMarked(
+        schoolId,
+        [{ studentId: updated.studentId, status: payload.status }],
+        studentsById,
+        updated.date
+      );
     }
 
     return updated;
@@ -196,7 +213,16 @@ const attendanceService = {
       filter.studentId = { $in: allowedIds };
     }
 
-    if (query.date) filter.date = normalizeDate(query.date);
+    // An exact day, or a range. The range is what lets the parent calendar ask for the
+    // months it is actually showing instead of pulling the most recent N records and
+    // silently rendering every older month as blank.
+    if (query.date) {
+      filter.date = normalizeDate(query.date);
+    } else if (query.from || query.to) {
+      filter.date = {};
+      if (query.from) filter.date.$gte = normalizeDate(query.from);
+      if (query.to) filter.date.$lte = normalizeDate(query.to);
+    }
     if (query.status) filter.status = query.status;
 
     // Only pagination keys go through to the query builder. It would otherwise

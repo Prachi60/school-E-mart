@@ -11,7 +11,7 @@ import AppHeader from '../../components/AppHeader';
 import { getAttendanceHistory, fetchParentHomework, listParentNotices } from '../../../services/parentApi';
 import { useKitProcurementProgress } from '../../../hooks/useKitProcurementProgress';
 import { useChildInfo } from '../../../utils/parentContext';
-import { toLocalDateKey } from '../../../utils/date';
+import { toLocalDateKey, toUtcDateKey } from '../../../utils/date';
 import { buildHomeworkStats, mapAssignmentForParentHomework } from '../../../utils/mappers/parentMapper';
 import ProductCard from '../../components/ProductCard';
 import SectionHeader from '../../components/SectionHeader';
@@ -118,7 +118,10 @@ const ParentHome = () => {
         } else {
           // If no specific single-date record returned, query recent history to find today's entry
           const { data: recentRecords } = await getAttendanceHistory(schoolId, studentId ? { studentId, limit: 10 } : { limit: 10 });
-          const todayRecord = (recentRecords || []).find((r) => toLocalDateKey(new Date(r.date)) === today);
+          // Records are stamped at UTC midnight, so the calendar day has to be read back
+          // in UTC. Converting to the local day first lands on the previous date for any
+          // viewer west of UTC, which showed yesterday's status as today's.
+          const todayRecord = (recentRecords || []).find((r) => toUtcDateKey(r.date) === today);
           setTodayAttendance(todayRecord || null);
         }
       } catch (err) {

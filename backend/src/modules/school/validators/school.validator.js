@@ -192,9 +192,25 @@ const attendanceStatus = Joi.string().valid(
   'leave'
 );
 
+// Attendance records what already happened, so a future date is always a mistake — but
+// the bound cannot be the exact instant `now`. The client sends its own *local*
+// calendar day, and any timezone ahead of UTC starts that day before UTC does: a
+// teacher marking at 01:00 IST sends "today", which parses to 00:00 UTC today, still
+// hours in the future by UTC reckoning, and `max('now')` rejected their own date. One
+// day of slack covers every real offset (max +14) while still refusing a genuinely
+// future date. Evaluated per request — a fixed date captured at module load would go
+// stale in a long-running process.
+const MAX_FUTURE_DATE_SKEW_MS = 24 * 60 * 60 * 1000;
+const pastOrPresentDate = () =>
+  Joi.date().custom((value, helpers) => {
+    if (value.getTime() > Date.now() + MAX_FUTURE_DATE_SKEW_MS) {
+      return helpers.message('Attendance date cannot be in the future');
+    }
+    return value;
+  });
+
 const markAttendanceSchema = Joi.object({
-  // Attendance records what already happened, so a future date is always a mistake
-  date: Joi.date().max('now').required(),
+  date: pastOrPresentDate().required(),
   classGrade: Joi.string().trim().required(),
   section: Joi.string().trim().required(),
   records: Joi.array()
@@ -202,7 +218,8 @@ const markAttendanceSchema = Joi.object({
       Joi.object({
         studentId: objectId.required(),
         status: attendanceStatus.required(),
-        remarks: Joi.string().trim().max(300).optional(),
+        // Omitted leaves any existing remark alone; an explicit '' clears it.
+        remarks: Joi.string().trim().max(300).allow('').optional(),
       })
     )
     .min(1)
@@ -214,6 +231,15 @@ const attendanceQuerySchema = Joi.object({
   ...paginationQuery,
   studentId: objectId.optional(),
   date: Joi.date().optional(),
+  // An inclusive range, so a calendar can ask for exactly the months it displays
+  // rather than taking the most recent N records and rendering older months blank.
+  // `date` still wins when both are sent.
+  from: Joi.date().optional(),
+  // The ordering rule only applies when there is a `from` to compare against —
+  // an unconditional Joi.ref makes a lone `to` fail on an unresolvable reference.
+  to: Joi.date()
+    .optional()
+    .when('from', { is: Joi.exist(), then: Joi.date().min(Joi.ref('from')) }),
   status: attendanceStatus.optional(),
   classGrade: Joi.string().trim().optional(),
   section: Joi.string().trim().optional(),
