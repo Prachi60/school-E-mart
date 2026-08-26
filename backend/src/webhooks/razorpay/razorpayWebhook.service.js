@@ -22,6 +22,19 @@ const markPaymentCaptured = async (paymentEntity) => {
   }
   if (payment.status === 'captured') return;
 
+  // Razorpay reports what was actually collected. Taking the event as proof of payment
+  // without comparing it to what was owed meant a short capture — a partial payment, or
+  // an intent whose amount was altered — still marked the order fully paid.
+  const capturedPaise = Number(paymentEntity.amount);
+  if (!Number.isFinite(capturedPaise) || capturedPaise < payment.amountPaise) {
+    logger.warn('Webhook payment.captured: captured amount is short of the amount owed', {
+      gatewayOrderId: paymentEntity.order_id,
+      capturedPaise,
+      expectedPaise: payment.amountPaise,
+    });
+    return;
+  }
+
   await Payment.findByIdAndUpdate(payment._id, {
     $set: {
       status: 'captured',
@@ -30,6 +43,21 @@ const markPaymentCaptured = async (paymentEntity) => {
   });
 
   await Order.findByIdAndUpdate(payment.orderId, { $set: { paymentStatus: 'paid' } });
+
+  // The webhook is the authoritative confirmation — it arrives even when the customer
+  // closes the tab before the client-side callback runs. Without this, an order that
+  // was genuinely paid for stayed stuck awaiting payment and was eventually swept away.
+  // activateOrder re-checks the captured total and is safe to reach twice, so the
+  // client callback and this racing each other is fine.
+  const orderService = require('../../modules/orders/services/order.service');
+  try {
+    await orderService.activateOrder(payment.orderId);
+  } catch (activationError) {
+    logger.warn('Webhook payment.captured: order activation failed', {
+      orderId: String(payment.orderId),
+      error: activationError.message,
+    });
+  }
 
   const order = await Order.findById(payment.orderId).lean();
   if (order) {

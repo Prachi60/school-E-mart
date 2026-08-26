@@ -115,10 +115,19 @@ const orderSchema = new mongoose.Schema({
   },
   orderStatus: {
     type: String,
-    enum: ['placed', 'accepted', 'processed', 'packed', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'returned'],
+    // 'pending_payment': an online order whose money has not been collected yet. It is
+    // NOT a placed order — no vendor sees it, no stock leaves on it permanently, no
+    // shipment or delivery job exists for it, and the customer's cart is still intact.
+    // It becomes 'placed' only when a payment is actually captured, and is swept away
+    // (with its stock restored) if that never happens. Creating online orders straight
+    // into 'placed' is what let an unpaid order enter fulfilment.
+    enum: ['pending_payment', 'placed', 'accepted', 'processed', 'packed', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'returned'],
     required: true,
     default: 'placed'
   },
+  // When an unpaid online order stops being reservable. Used by the sweeper that
+  // cancels abandoned checkouts and gives their stock back.
+  paymentExpiresAt: { type: Date },
   statusHistory: [{
     status: { type: String, required: true },
     at: { type: Date, required: true, default: Date.now },

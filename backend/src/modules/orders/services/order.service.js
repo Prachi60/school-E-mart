@@ -8,9 +8,15 @@ const commissionService = require('./commission.service');
 const inventoryService = require('./inventory.service');
 const paymentService = require('./payment.service');
 const cartService = require('../../marketplace/services/cart.service');
+const paymentRepository = require('../repositories/payment.repository');
 const { generateOrderNumber } = require('../utils/orderNumber');
 const { runAtomic } = require('../utils/atomic');
-const { canTransition } = require('../utils/statusMachine');
+const { canTransition, AWAITING_PAYMENT } = require('../utils/statusMachine');
+
+// How long an unpaid online order holds its stock before the sweeper releases it.
+// Long enough for a customer to finish a UPI collect request, short enough that an
+// abandoned checkout does not keep goods off the shelf.
+const PENDING_PAYMENT_TTL_MS = 30 * 60 * 1000;
 const settlementService = require('../../vendor/services/settlement.service');
 const walletService = require('../../wallet/services/wallet.service');
 const { deliveryShipmentQueue } = require('../../../queues/deliveryQueues');
@@ -91,9 +97,15 @@ const orderService = {
       await inventoryService.deductStock(summary.items, session);
 
       const orderNumber = generateOrderNumber();
-      const initialStatus = 'placed';
-      // COD and online orders with a payable balance start with pending payment status;
-      // 100% wallet-paid or zero-total orders are paid up front.
+
+      // An online order with money still to collect is not a placed order. It is held
+      // as 'pending_payment' — no vendor sees it, no shipment or delivery job exists
+      // for it, the cart is left intact, and nobody is told an order was placed — until
+      // a payment is actually captured. COD is different by design: the courier
+      // collects on delivery, so the order is real the moment it is placed. A fully
+      // wallet-paid or zero-total order is already paid, so it is real too.
+      const requiresPrepayment = paymentMethod === 'online' && payablePaise > 0;
+      const initialStatus = requiresPrepayment ? 'pending_payment' : 'placed';
       const paymentStatus = payablePaise === 0 ? 'paid' : 'pending';
 
       const [order] = await Order.create(
@@ -143,11 +155,14 @@ const orderService = {
             paymentMethod,
             paymentStatus,
             orderStatus: initialStatus,
+            ...(requiresPrepayment
+              ? { paymentExpiresAt: new Date(Date.now() + PENDING_PAYMENT_TTL_MS) }
+              : {}),
             statusHistory: [
               {
                 status: initialStatus,
                 at: new Date(),
-                note: 'Order placed',
+                note: requiresPrepayment ? 'Awaiting online payment' : 'Order placed',
                 byUserId: actor.userId || userId,
               },
             ],
@@ -180,65 +195,94 @@ const orderService = {
 
       await Order.findByIdAndUpdate(order._id, { $set: { paymentId: payment._id } }, opts);
 
-      const validVendorIds = vendorIds.filter((vId) => vId && mongoose.Types.ObjectId.isValid(vId));
-      const shipmentDocs = validVendorIds.map((vendorId) => ({
+      // Everything below turns a record into a live order that vendors work on. None of
+      // it may happen for an online order that has not been paid for — doing it at
+      // creation is precisely what let an unpaid order reach fulfilment. It runs again,
+      // once, from activateOrder when the payment is captured.
+      if (!requiresPrepayment) {
+        await this.applyPlacementEffects(order, summary.items, { session });
+        await cartService.clearCart(userId, audience);
+      }
+
+      return (await orderRepository.findById(order._id)) || order;
+    });
+  },
+
+  /**
+   * The side effects of an order becoming real: vendor shipments, the delivery job, and
+   * telling the customer it was placed. Split out of createOrder so a prepaid online
+   * order can run exactly the same steps at the moment its payment is captured.
+   *
+   * Every step is idempotent or guarded, because activation can be reached twice — once
+   * from the client confirming the payment and once from the Razorpay webhook.
+   */
+  async applyPlacementEffects(order, items, { session = null } = {}) {
+    const opts = session ? { session } : {};
+    const vendorIds = [...new Set((order.vendorIds || []).map(String))];
+    const validVendorIds = vendorIds.filter((vId) => vId && mongoose.Types.ObjectId.isValid(vId));
+
+    const shipmentDocs = [];
+    for (const vendorId of validVendorIds) {
+      // Guarded rather than blindly created: activation can arrive twice, and a
+      // duplicate shipment would show the vendor the same order to pack twice.
+      const exists = await OrderShipment.exists({ orderId: order._id, vendorId });
+      if (exists) continue;
+      shipmentDocs.push({
         orderId: order._id,
         vendorId,
-        items: summary.items
+        items: items
           .map((item, index) => ({ item, index }))
           .filter(({ item }) => String(item.vendorId) === String(vendorId))
           .map(({ item, index }) => ({ orderItemIndex: index, quantity: item.quantity })),
         status: 'placed',
-      }));
-      if (shipmentDocs.length) {
-        await OrderShipment.create(shipmentDocs, opts);
+      });
+    }
+    if (shipmentDocs.length) {
+      await OrderShipment.create(shipmentDocs, opts);
+    }
+
+    const address = order.address || {};
+    try {
+      await deliveryShipmentQueue.add({
+        orderId: String(order.orderNumber),
+        orderMongoId: order._id,
+        pickup: {
+          name: 'School E-Mart',
+          phone: '9999999999',
+          address: 'Default pickup location',
+          pincode: address.pinCode || address.pincode || '',
+        },
+        drop: {
+          name: address.name || 'Customer',
+          phone: address.phone || '9999999999',
+          address: address.line1 || '',
+          pincode: address.pinCode || address.pincode || '',
+        },
+        items: items.map((item) => ({
+          name: item.name,
+          qty: item.quantity,
+          weight: 0.5,
+          value: Math.round((item.lineTotalPaise || 0) / 100),
+        })),
+        paymentMode: order.paymentMethod === 'cod' ? 'COD' : 'PREPAID',
+        totalValue: Math.round((order.totalPaise || 0) / 100),
+        weight: Math.max(0.5, items.length * 0.5),
+        // The queue de-duplicates on this, so a second activation cannot book a
+        // second courier pickup for the same order.
+        idempotencyKey: `shipment:create:${order.orderNumber}`,
+      });
+    } catch (shipErr) {
+      // Background delivery queue warning should not block order placement
+    }
+
+    try {
+      const hydrated = (await orderRepository.findById(order._id)) || order;
+      if (hydrated && hydrated.userId) {
+        triggerService.notifyOrderPlaced(hydrated);
       }
-
-      await cartService.clearCart(userId, audience);
-
-      const hydratedOrder = (await orderRepository.findById(order._id)) || order;
-
-      try {
-        await deliveryShipmentQueue.add({
-          orderId: String(order.orderNumber),
-          orderMongoId: order._id,
-          pickup: {
-            name: 'School E-Mart',
-            phone: '9999999999',
-            address: 'Default pickup location',
-            pincode: payload.address?.pinCode || payload.address?.pincode || '',
-          },
-          drop: {
-            name: payload.address?.name || 'Customer',
-            phone: payload.address?.phone || '9999999999',
-            address: payload.address?.line1 || '',
-            pincode: payload.address?.pinCode || payload.address?.pincode || '',
-          },
-          items: summary.items.map((item) => ({
-            name: item.name,
-            qty: item.quantity,
-            weight: 0.5,
-            value: Math.round((item.lineTotalPaise || 0) / 100),
-          })),
-          paymentMode: paymentMethod === 'cod' ? 'COD' : 'PREPAID',
-          totalValue: Math.round((summary.totalPaise || 0) / 100),
-          weight: Math.max(0.5, summary.items.length * 0.5),
-          idempotencyKey: `shipment:create:${order.orderNumber}`,
-        });
-      } catch (shipErr) {
-        // Background delivery queue warning should not block order placement
-      }
-
-      try {
-        if (hydratedOrder && hydratedOrder.userId) {
-          triggerService.notifyOrderPlaced(hydratedOrder);
-        }
-      } catch (notifyErr) {
-        // Notification warning should not block order placement
-      }
-
-      return hydratedOrder;
-    });
+    } catch (notifyErr) {
+      // Notification warning should not block order placement
+    }
   },
 
   async getOrder(orderId) {
@@ -275,6 +319,9 @@ const orderService = {
 
   listAllOrders(query) {
     const filter = {};
+    // An unpaid online order is not a sale. It stays out of the operations list and
+    // out of every total computed from it unless someone asks for it by name.
+    if (!query.status) filter.orderStatus = { $ne: AWAITING_PAYMENT };
     if (query.status) filter.orderStatus = query.status;
     if (query.audience) filter.audience = query.audience;
     if (query.userId) filter.userId = query.userId;
@@ -292,6 +339,9 @@ const orderService = {
 
   listSchoolPickupOrders(schoolId, query) {
     const filter = {};
+    // Same rule as the admin list: a school must not be told to expect a delivery for
+    // an order nobody has paid for.
+    if (!query.status) filter.orderStatus = { $ne: AWAITING_PAYMENT };
     if (query.status) filter.orderStatus = query.status;
     if (query.paymentStatus) filter.paymentStatus = query.paymentStatus;
     if (query.search) filter.orderNumber = { $regex: query.search, $options: 'i' };
@@ -301,6 +351,123 @@ const orderService = {
       if (query.to) filter['audit.createdAt'].$lte = new Date(query.to);
     }
     return orderRepository.paginateSchoolPickupOrders(schoolId, stripPaginationMeta(query), filter);
+  },
+
+  /**
+   * Promote a paid online order into a real, placed order.
+   *
+   * This is the ONLY way a 'pending_payment' order becomes fulfilable, and it refuses
+   * to run unless a captured payment covering the outstanding balance actually exists —
+   * so it cannot be driven by a client simply calling the confirm endpoint. Safe to
+   * call more than once: the client callback and the Razorpay webhook both land here,
+   * and whichever arrives second is a no-op.
+   */
+  async activateOrder(orderId, { expectedPaidPaise = null } = {}) {
+    const order = await Order.findById(orderId).lean();
+    if (!order) throw new NotFoundError('Order not found', 'ORDER_NOT_FOUND');
+    if (order.orderStatus !== AWAITING_PAYMENT) return order;
+
+    if (order.orderStatus === 'cancelled') {
+      throw new BadRequestError('Order was cancelled', null, 'ORDER_CANCELLED');
+    }
+
+    // Trust the Payment collection, never the caller. The money owed to the gateway is
+    // the total less whatever the wallet already covered.
+    const owedPaise =
+      expectedPaidPaise == null
+        ? Math.max(0, (order.totalPaise || 0) - (order.walletAmountPaise || 0))
+        : expectedPaidPaise;
+    const capturedPaise = await paymentRepository.sumCapturedForOrder(orderId);
+    if (capturedPaise < owedPaise) {
+      throw new BadRequestError(
+        'Order is not fully paid',
+        null,
+        'ORDER_NOT_PAID'
+      );
+    }
+
+    // Conditional on still being unpaid, so two concurrent activations (client callback
+    // racing the webhook) cannot both pass this point and double-run the effects.
+    const promoted = await Order.findOneAndUpdate(
+      { _id: orderId, orderStatus: AWAITING_PAYMENT },
+      {
+        $set: {
+          orderStatus: 'placed',
+          paymentStatus: 'paid',
+          placedAt: new Date(),
+          paymentExpiresAt: null,
+        },
+        $push: {
+          statusHistory: { status: 'placed', at: new Date(), note: 'Payment received' },
+        },
+      },
+      { new: true }
+    ).lean();
+    if (!promoted) return Order.findById(orderId).lean();
+
+    await this.applyPlacementEffects(promoted, promoted.items || []);
+    // Only now is the basket actually spent.
+    await cartService.clearCart(promoted.userId, promoted.audience);
+
+    return promoted;
+  },
+
+  /**
+   * Release an online order that was never paid for, returning its stock to the shelf.
+   * Without this, an abandoned checkout held its items out of stock permanently.
+   */
+  async expireUnpaidOrders({ now = new Date(), limit = 200 } = {}) {
+    const stale = await Order.find({
+      orderStatus: AWAITING_PAYMENT,
+      paymentExpiresAt: { $lte: now },
+    })
+      .limit(limit)
+      .lean();
+
+    const expired = [];
+    for (const order of stale) {
+      // Conditional again: a payment landing at the same moment must win over the
+      // sweeper, so the order is only cancelled while it is still unpaid.
+      const cancelled = await Order.findOneAndUpdate(
+        { _id: order._id, orderStatus: AWAITING_PAYMENT },
+        {
+          $set: {
+            orderStatus: 'cancelled',
+            paymentStatus: 'failed',
+            cancellation: { at: new Date(), reason: 'Payment was not completed in time' },
+          },
+          $push: {
+            statusHistory: {
+              status: 'cancelled',
+              at: new Date(),
+              note: 'Payment not completed',
+            },
+          },
+        },
+        { new: true }
+      ).lean();
+      if (!cancelled) continue;
+
+      await inventoryService.restoreStock(order.items || []);
+
+      // The wallet portion was debited at creation, so it has to come back too.
+      if (order.walletAmountPaise > 0) {
+        try {
+          await walletService.postTransaction(order.userId, {
+            type: 'credit',
+            category: 'order_refund',
+            amountPaise: order.walletAmountPaise,
+            reference: { kind: 'Order', id: order._id },
+            description: `Wallet returned — payment not completed for ${order.orderNumber}`,
+          });
+        } catch (walletErr) {
+          // A failed wallet return must not strand the rest of the sweep.
+        }
+      }
+      expired.push(cancelled);
+    }
+
+    return expired;
   },
 
   async updatePaymentStatus(orderId, paymentStatus, { session = null } = {}) {

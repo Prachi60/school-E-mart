@@ -1,17 +1,35 @@
 const { NotFoundError, ConflictError, BadRequestError } = require('../../../common/errors');
 const paymentRepository = require('../repositories/payment.repository');
 const paymentGateway = require('../../../services/paymentGateway');
-const { randomHex } = require('../../../utils/crypto');
 const Payment = require('../../../database/models/Payment');
 const Order = require('../../../database/models/Order');
 const { triggerService } = require('../../../services/notification');
 
+/**
+ * Whether an online payment may be "captured" through the internal stub gateway.
+ *
+ * Only ever true where no real money exists: the automated tests, and a local dev
+ * machine that has deliberately opted in. In every other environment a missing
+ * Razorpay configuration must fail the payment rather than hand out a free capture.
+ */
+const allowStubCapture = () =>
+  process.env.NODE_ENV === 'test' || process.env.ALLOW_STUB_PAYMENTS === 'true';
+
 const paymentService = {
+  allowStubCapture,
+
   async createPaymentForOrder(order, { method, amountPaise, session = null }) {
     // The gateway collects only what the wallet did not cover. Defaults to the
     // full total when no explicit amount is given (unchanged legacy behaviour).
     const chargePaise = amountPaise == null ? order.totalPaise : amountPaise;
-    const idempotencyKey = `order-${order._id}-${randomHex(8)}`;
+
+    // Derived from what the payment IS, not from a fresh random string. The key used to
+    // be `order-<id>-<random>`, which differed on every call — so the lookup below could
+    // never match and the idempotency this function advertises did not exist: a retried
+    // checkout silently created a second Payment (and a second gateway intent) for the
+    // same money. An RFQ order legitimately has two payments (advance, then remainder),
+    // and those differ by amount, so the amount is part of the key.
+    const idempotencyKey = `order-${order._id}-${method === 'cod' ? 'cod' : 'online'}-${chargePaise}`;
     const existing = await paymentRepository.findByIdempotencyKey(idempotencyKey);
     if (existing) return existing;
 
@@ -109,7 +127,32 @@ const paymentService = {
         throw new BadRequestError('Invalid payment signature', null, 'INVALID_PAYMENT_SIGNATURE');
       }
       gatewayPaymentId = razorpayPaymentId;
+    } else if (payment.method === 'cod' || payment.method === 'wallet') {
+      // COD is "captured" at placement because the courier collects later, and a
+      // wallet payment was already debited from a real balance. Neither involves a
+      // gateway, so there is nothing to verify.
+      const capture = await paymentGateway.capturePayment({
+        gatewayOrderId: payment.gatewayOrderId,
+        gateway: payment.gateway,
+      });
+      gatewayPaymentId = capture.gatewayPaymentId;
     } else {
+      // An online payment on the internal gateway means Razorpay was not configured
+      // when the intent was created. The internal gateway is a stub: its
+      // capturePayment fabricates an id and reports success without any money
+      // moving. Capturing through it marked online orders paid for free — and the
+      // checkout page calls this endpoint with an empty body in exactly that case,
+      // so the hole was reachable by every customer, not just an attacker.
+      //
+      // Outside test/dev this is a misconfiguration, and the safe response to
+      // "payments are not set up" is to refuse the payment, never to grant it.
+      if (!allowStubCapture()) {
+        throw new BadRequestError(
+          'Online payments are not available right now. Please try again later or choose Cash on Delivery.',
+          null,
+          'PAYMENT_GATEWAY_UNAVAILABLE'
+        );
+      }
       const capture = await paymentGateway.capturePayment({
         gatewayOrderId: payment.gatewayOrderId,
         gateway: payment.gateway,

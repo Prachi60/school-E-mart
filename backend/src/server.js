@@ -15,6 +15,7 @@ const logger = require('./common/logger');
 let server;
 let outboxWorkerTimer;
 let scheduledNoticeWorkerTimer;
+let unpaidOrderSweeperTimer;
 let isShuttingDown = false;
 
 const shutdown = async (signal, exitCode = 0) => {
@@ -34,6 +35,7 @@ const shutdown = async (signal, exitCode = 0) => {
     stopOutboxWorker(outboxWorkerTimer);
     stopDeliveryWorkers();
     if (scheduledNoticeWorkerTimer) clearInterval(scheduledNoticeWorkerTimer);
+    if (unpaidOrderSweeperTimer) clearInterval(unpaidOrderSweeperTimer);
 
     if (server) {
       await new Promise((resolve, reject) => {
@@ -106,6 +108,22 @@ const bootstrap = async () => {
       logger.error('Scheduled notice processing failed', { message: err.message });
     });
   }, 60000);
+
+  // Releases online orders whose payment never arrived, putting their stock back on
+  // the shelf. Without it an abandoned checkout holds its items out of stock forever.
+  const orderService = require('./modules/orders/services/order.service');
+  unpaidOrderSweeperTimer = setInterval(() => {
+    orderService
+      .expireUnpaidOrders()
+      .then((expired) => {
+        if (expired.length) {
+          logger.info('Released unpaid orders', { count: expired.length });
+        }
+      })
+      .catch((err) => {
+        logger.error('Unpaid order sweep failed', { message: err.message });
+      });
+  }, 5 * 60 * 1000);
 
   server = await startServer();
 };
