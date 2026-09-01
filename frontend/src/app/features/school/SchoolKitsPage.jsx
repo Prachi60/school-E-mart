@@ -4,12 +4,13 @@ import {
   ArrowLeft, Search, Filter, ChevronDown, Check, X,
   MoreVertical, Package, CheckCircle, AlertCircle, Plus,
   Users, Layers, Award, Tag, Sparkles, ShoppingBag, Eye, Loader2,
-  Pencil, Trash2, Power, ToggleLeft, ToggleRight
+  Pencil, Trash2, Power, ToggleLeft, ToggleRight, UserX, TimerOff
 } from 'lucide-react';
 import { listKits, updateKit, deleteKit } from '../../../services/schoolApi';
 import { useSchoolId } from '../../../utils/schoolContext';
 import { getErrorMessage } from '../../../utils/apiHelpers';
 import { toAbsoluteUrl } from '../../../utils/url';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 
 const mapKit = (k) => {
   const imageUrl = toAbsoluteUrl(k.imageId?.storageKey || k.imageUrl || k.image?.url);
@@ -36,6 +37,12 @@ const mapKit = (k) => {
     mrp: k.mrpPaise ? ((k.mrpPaise || 0) / 100).toFixed(0) : null,
     vendorName,
     salesCount: k.salesCount || 0,
+    // How many students this kit is for still don't have it, and whether the
+    // admin's sale window has already taken it off the parent app.
+    pendingCount: k.coverage?.pendingCount || 0,
+    eligibleCount: k.coverage?.eligibleCount || 0,
+    saleEndsAt: k.purchaseWindow?.endsAt || null,
+    saleExpired: Boolean(k.purchaseWindow?.expired),
     status: k.status === 'active' ? 'Active' : 'Draft',
     updatedDate: k.audit?.updatedAt
       ? new Date(k.audit.updatedAt).toLocaleDateString('en-GB')
@@ -129,7 +136,13 @@ const SchoolKitsPage = () => {
   const totalCount = kits.length;
   const activeCount = kits.filter((k) => k.status === 'Active').length;
   const draftCount = kits.filter((k) => k.status === 'Draft').length;
-  const archivedCount = kits.filter((k) => k.status === 'Archived').length;
+  // Live kits the sale window has already closed — they still exist here, but
+  // no parent can buy them any more, so they need to be visible at a glance.
+  const closedCount = kits.filter((k) => k.status === 'Active' && k.saleExpired).length;
+  // Students across every kit who still haven't got the one meant for them.
+  // Counts a student once per kit they're missing, which is what "outstanding
+  // purchases" means to a school chasing them.
+  const pendingTotal = kits.reduce((sum, k) => sum + (k.status === 'Active' ? k.pendingCount : 0), 0);
 
   // Filter kits list
   // Derived from the kits actually loaded. The list used to be a hardcoded five
@@ -180,7 +193,7 @@ const SchoolKitsPage = () => {
 
       {/* Metric Cards Row Grid */}
       <div className="px-6 pt-6 overflow-x-auto scrollbar-none">
-        <div className="flex sm:grid sm:grid-cols-4 gap-3 min-w-[550px] pb-1">
+        <div className="flex sm:grid sm:grid-cols-5 gap-3 min-w-[690px] pb-1">
           
           {/* Card 1: Total Kits */}
           <div className="flex-1 bg-white border border-gray-200/80 p-3.5 rounded-2xl shadow-sm text-center">
@@ -209,13 +222,26 @@ const SchoolKitsPage = () => {
             <span className="text-sm font-black text-deep-purple block mt-0.5">{draftCount}</span>
           </div>
 
-          {/* Card 4: Archived Kits */}
+          {/* Card 4: Students still missing a kit */}
           <div className="flex-1 bg-white border border-gray-200/80 p-3.5 rounded-2xl shadow-sm text-center">
-            <div className="w-8 h-8 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mx-auto shrink-0 border border-rose-100">
-              <Layers size={15} />
+            <div className="w-8 h-8 rounded-full bg-orange-50 text-orange-500 flex items-center justify-center mx-auto shrink-0 border border-orange-100">
+              <UserX size={15} />
             </div>
-            <span className="text-[10px] text-gray-400 font-bold block mt-2">Archived Kits</span>
-            <span className="text-sm font-black text-deep-purple block mt-0.5">{archivedCount}</span>
+            <span className="text-[10px] text-gray-400 font-bold block mt-2">Not Purchased</span>
+            <span className="text-sm font-black text-deep-purple block mt-0.5">{pendingTotal}</span>
+          </div>
+
+          {/* Card 5: Kits the sale window has already closed */}
+          <div className="flex-1 bg-white border border-gray-200/80 p-3.5 rounded-2xl shadow-sm text-center">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center mx-auto shrink-0 border ${
+              closedCount > 0
+                ? 'bg-rose-50 text-rose-500 border-rose-100'
+                : 'bg-gray-50 text-gray-400 border-gray-150'
+            }`}>
+              <TimerOff size={15} />
+            </div>
+            <span className="text-[10px] text-gray-400 font-bold block mt-2">Sale Closed</span>
+            <span className="text-sm font-black text-deep-purple block mt-0.5">{closedCount}</span>
           </div>
 
         </div>
@@ -341,18 +367,41 @@ const SchoolKitsPage = () => {
                   </div>
                 </div>
 
-                {/* Sold count — quick link to the purchases report */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigate(`/school/kits/${kit.id}/purchases`);
-                  }}
-                  className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5 hover:bg-emerald-100 transition-all"
-                >
-                  <ShoppingBag size={10} />
-                  {kit.salesCount} Sold — View Purchases
-                </button>
+                {/* Sold / still-missing counts — both open the purchases report,
+                    which is where the actual student names live. */}
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/school/kits/${kit.id}/purchases`);
+                    }}
+                    className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-full px-2 py-0.5 hover:bg-emerald-100 transition-all"
+                  >
+                    <ShoppingBag size={10} />
+                    {kit.salesCount} Sold
+                  </button>
+
+                  {kit.eligibleCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/school/kits/${kit.id}/purchases`);
+                      }}
+                      className={`inline-flex items-center gap-1 text-[10px] font-black rounded-full px-2 py-0.5 border transition-all ${
+                        kit.pendingCount > 0
+                          ? 'text-orange-700 bg-orange-50 border-orange-100 hover:bg-orange-100'
+                          : 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100'
+                      }`}
+                    >
+                      <UserX size={10} />
+                      {kit.pendingCount > 0
+                        ? `${kit.pendingCount} of ${kit.eligibleCount} not purchased`
+                        : 'All students covered'}
+                    </button>
+                  )}
+                </div>
 
               </div>
             </div>
@@ -371,6 +420,13 @@ const SchoolKitsPage = () => {
                   <span className="w-1 h-1 rounded-full bg-orange-500" />
                   Draft
                 </span>
+              )}
+
+              {/* Sale window — a kit can be Active and still be unbuyable, which
+                  is exactly the case a school needs told. Sits under the status
+                  badge to stay clear of the card's absolute three-dot menu. */}
+              {kit.status === 'Active' && (
+                <KitSaleCountdown endsAt={kit.saleEndsAt} variant="admin" />
               )}
 
               {/* Pricing Display */}

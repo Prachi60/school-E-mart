@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Search, Eye, X, School, MapPin, Mail, User, Check, Ban, RefreshCw, Loader2,
   GraduationCap, Plus, Phone, Hash, CalendarDays, AlertCircle, Package, Edit, Trash2,
-  Users, PhoneCall, CheckCircle2, Clock, Copy
+  Users, PhoneCall, CheckCircle2, Clock, Copy, Activity, Zap, UserCheck
 } from 'lucide-react';
 import {
   listSchools,
@@ -242,13 +242,16 @@ const SchoolListManagement = () => {
     loadSchools();
   }, [loadSchools]);
 
-  const counts = useMemo(() => ({
-    total: schools.length,
-    active: schools.filter((s) => s.statusRaw === 'active').length,
-    pending: schools.filter((s) => s.statusRaw === 'pending').length,
-    suspended: schools.filter((s) => s.statusRaw === 'suspended').length,
-    rejected: schools.filter((s) => s.statusRaw === 'rejected').length,
-  }), [schools]);
+  const counts = useMemo(() => {
+    const total = schools.length;
+    const active = schools.filter((s) => s.statusRaw === 'active').length;
+    const pending = schools.filter((s) => s.statusRaw === 'pending').length;
+    const suspended = schools.filter((s) => s.statusRaw === 'suspended').length;
+    const rejected = schools.filter((s) => s.statusRaw === 'rejected').length;
+    const activeTodaySchools = schools.filter((s) => s.activityStats?.dailyUsage?.status === 'active_today').length;
+    const activeTeachersToday = schools.reduce((sum, s) => sum + (s.activityStats?.teacherStats?.activeToday || 0), 0);
+    return { total, active, pending, suspended, rejected, activeTodaySchools, activeTeachersToday };
+  }, [schools]);
 
   const visibleSchools = useMemo(() => {
     const status = TAB_STATUS[activeTab];
@@ -452,7 +455,7 @@ const SchoolListManagement = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 select-none">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 select-none">
         <StatCard
           icon={<School size={22} />}
           tone="bg-blue-50 border-blue-100 text-blue-600"
@@ -462,20 +465,26 @@ const SchoolListManagement = () => {
         <StatCard
           icon={<Check size={22} />}
           tone="bg-emerald-50 border-emerald-100 text-emerald-600"
-          label="Active"
+          label="Active Schools"
           value={counts.active}
+        />
+        <StatCard
+          icon={<Zap size={22} />}
+          tone="bg-indigo-50 border-indigo-100 text-indigo-600"
+          label="Active Today"
+          value={counts.activeTodaySchools}
+        />
+        <StatCard
+          icon={<UserCheck size={22} />}
+          tone="bg-teal-50 border-teal-100 text-teal-600"
+          label="Teachers Active Today"
+          value={counts.activeTeachersToday}
         />
         <StatCard
           icon={<GraduationCap size={22} />}
           tone="bg-amber-50 border-amber-100 text-amber-600"
-          label="Pending"
+          label="Pending Approval"
           value={counts.pending}
-        />
-        <StatCard
-          icon={<Ban size={22} />}
-          tone="bg-rose-50 border-rose-100 text-rose-600"
-          label="Suspended"
-          value={counts.suspended}
         />
       </div>
 
@@ -549,20 +558,19 @@ const SchoolListManagement = () => {
                 <tr className="border-b border-gray-250 bg-gray-50 text-[10px] font-black uppercase text-gray-400 tracking-wider">
                   <th className="py-4 px-5">Ref No</th>
                   <th className="py-4 px-5">School</th>
-                  <th className="py-4 px-5">Admin</th>
-                  <th className="py-4 px-5">Contact</th>
-                  <th className="py-4 px-5">Location</th>
+                  <th className="py-4 px-5">Admin / Contact</th>
+                  <th className="py-4 px-5">Teachers Activity</th>
+                  <th className="py-4 px-5">Students & Attendance</th>
                   <th className="py-4 px-5">Parent Logins</th>
-                  <th className="py-4 px-5">Grades</th>
-                  <th className="py-4 px-5">Registered</th>
-                  <th className="py-4 px-5">Status</th>
+                  <th className="py-4 px-5">Usage Status</th>
+                  <th className="py-4 px-5">Partner Status</th>
                   <th className="py-4 px-5 text-right pr-6">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
                 {visibleSchools.length === 0 ? (
                   <tr>
-                    <td colSpan="10" className="py-12 text-center text-xs font-black text-gray-400">
+                    <td colSpan="9" className="py-12 text-center text-xs font-black text-gray-400">
                       No school records found.
                     </td>
                   </tr>
@@ -580,22 +588,30 @@ const SchoolListManagement = () => {
                         <span className="text-xs font-bold text-gray-700 block">
                           {school.adminName || school.principalName || '—'}
                         </span>
-                        {school.principalName && school.adminName !== school.principalName && (
-                          <span className="text-[9px] text-gray-400 font-bold">
-                            Principal: {school.principalName}
+                        <span className="text-[10px] font-bold text-gray-500 block">{school.adminEmail || '—'}</span>
+                        <span className="text-[9px] text-gray-400 font-bold">{school.adminPhone || '—'}</span>
+                      </td>
+                      <td className="py-4 px-5">
+                        <span className="text-xs font-extrabold text-gray-800 block">
+                          {school.activityStats?.teacherStats?.total || 0} Total
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-600 block">
+                          {school.activityStats?.teacherStats?.activeToday || 0} Active Today
+                        </span>
+                      </td>
+                      <td className="py-4 px-5">
+                        <span className="text-xs font-extrabold text-gray-800 block mb-1">
+                          {school.activityStats?.studentStats?.total || 0} Students
+                        </span>
+                        {school.activityStats?.studentStats?.attendanceToday ? (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                            <CheckCircle2 size={10} /> Marked Today
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-bold text-gray-400 bg-gray-50 px-2 py-0.5 rounded-md border border-gray-200">
+                            <Clock size={10} /> Pending Today
                           </span>
                         )}
-                      </td>
-                      <td className="py-4 px-5">
-                        <span className="text-[10px] font-bold text-gray-600 block break-all">
-                          {school.adminEmail || '—'}
-                        </span>
-                        <span className="text-[10px] font-bold text-gray-400">{school.adminPhone || '—'}</span>
-                      </td>
-                      <td className="py-4 px-5">
-                        <span className="text-[10px] font-bold text-gray-600">
-                          {[school.city, school.state].filter(Boolean).join(', ') || '—'}
-                        </span>
                       </td>
                       <td className="py-4 px-5">
                         <button
@@ -611,6 +627,23 @@ const SchoolListManagement = () => {
                             ({school.parentStats?.total ?? 0} Total)
                           </span>
                         </button>
+                      </td>
+                      <td className="py-4 px-5">
+                        {school.activityStats?.dailyUsage?.status === 'active_today' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <Zap size={10} className="fill-emerald-500 text-emerald-600" /> Active Today
+                          </span>
+                        )}
+                        {school.activityStats?.dailyUsage?.status === 'active_week' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-black uppercase bg-blue-50 text-blue-700 border border-blue-200">
+                            <Activity size={10} /> Active This Week
+                          </span>
+                        )}
+                        {(!school.activityStats?.dailyUsage?.status || school.activityStats?.dailyUsage?.status === 'inactive') && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase bg-gray-100 text-gray-500 border border-gray-200">
+                            Inactive
+                          </span>
+                        )}
                       </td>
                       <td className="py-4 px-5">
                         <span className="text-xs font-extrabold text-gray-700">{school.gradesCount}</span>
@@ -923,6 +956,44 @@ const SchoolListManagement = () => {
                   value={selectedSchool.gradesOffered.join(', ')}
                 />
                 <DetailBlock icon={<CalendarDays size={14} />} label="Registered" value={selectedSchool.registeredOn} />
+              </div>
+
+              {/* Platform Activity & Usage Track Block */}
+              <div className="border-t border-gray-150 pt-4 space-y-3">
+                <h4 className="text-xs font-black text-[#0B1528] uppercase tracking-wider flex items-center gap-1.5">
+                  <Activity size={14} className="text-indigo-600" /> Platform Usage & Activity Track
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-indigo-50/50 rounded-2xl p-4 border border-indigo-100/80">
+                    <span className="text-[10px] font-black uppercase text-indigo-700 block">Teachers Activity</span>
+                    <span className="text-lg font-black text-[#0B1528] mt-1 block">
+                      {selectedSchool.activityStats?.teacherStats?.total || 0} Total
+                    </span>
+                    <span className="text-xs font-bold text-emerald-600 block mt-0.5">
+                      {selectedSchool.activityStats?.teacherStats?.activeToday || 0} Logged In Today
+                    </span>
+                  </div>
+
+                  <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100/80">
+                    <span className="text-[10px] font-black uppercase text-emerald-700 block">Students & Attendance</span>
+                    <span className="text-lg font-black text-[#0B1528] mt-1 block">
+                      {selectedSchool.activityStats?.studentStats?.total || 0} Students
+                    </span>
+                    <span className="text-xs font-bold text-emerald-700 block mt-0.5">
+                      {selectedSchool.activityStats?.studentStats?.attendanceToday ? '✅ Marked Today' : '⏰ Pending Today'}
+                    </span>
+                  </div>
+
+                  <div className="bg-amber-50/50 rounded-2xl p-4 border border-amber-100/80">
+                    <span className="text-[10px] font-black uppercase text-amber-800 block">Daily Platform Status</span>
+                    <span className="text-sm font-black text-[#0B1528] mt-1 block">
+                      {selectedSchool.activityStats?.dailyUsage?.label || 'Inactive'}
+                    </span>
+                    <span className="text-[10px] font-bold text-gray-500 block mt-0.5">
+                      Parent Logins: {selectedSchool.parentStats?.loggedIn || 0} / {selectedSchool.parentStats?.total || 0}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 

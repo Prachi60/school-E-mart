@@ -3,8 +3,9 @@ const settingsRepository = require('../repositories/settings.repository');
 const { SETTINGS_AUDIT_ENTITY_ID } = require('../repositories/settings.repository');
 const auditRepository = require('../../auth/repositories/audit.repository');
 const { runAtomic } = require('../../orders/utils/atomic');
+const { invalidateKitPurchaseWindowCache } = require('../../academics/utils/kitPurchaseWindow.util');
 
-const VALID_SECTIONS = ['general', 'marketplace', 'orders', 'school', 'security', 'billing', 'contact', 'lms'];
+const VALID_SECTIONS = ['general', 'marketplace', 'orders', 'school', 'security', 'billing', 'contact', 'lms', 'kits'];
 
 const DEFAULT_CONTACT_SETTINGS = {
   phone: '+91 98765 43210',
@@ -18,6 +19,13 @@ const DEFAULT_CONTACT_SETTINGS = {
 
 const DEFAULT_LMS_SETTINGS = {
   maxVideoSizeMB: 500,
+};
+
+// How long a published kit stays on sale to parents. Off by default, so an
+// untouched install behaves exactly as it did before the window existed.
+const DEFAULT_KITS_SETTINGS = {
+  purchaseWindowEnabled: false,
+  purchaseWindowDays: 7,
 };
 
 const settingsService = {
@@ -52,6 +60,9 @@ const settingsService = {
     if (section === 'lms') {
       return { ...DEFAULT_LMS_SETTINGS, ...(settings.lms || {}) };
     }
+    if (section === 'kits') {
+      return { ...DEFAULT_KITS_SETTINGS, ...(settings.kits || {}) };
+    }
     return settings[section] || {};
   },
 
@@ -67,6 +78,11 @@ const settingsService = {
       } else {
         updated = await settingsRepository.updatePlatformSettings(section, payload, actor.userId);
       }
+
+      // Kit visibility is read on a short-lived cache in front of this
+      // collection; drop it so the admin sees their own change take effect
+      // immediately rather than up to a TTL later.
+      if (section === 'kits') invalidateKitPurchaseWindowCache();
 
       await auditRepository.log({
         actorUserId: actor.userId,

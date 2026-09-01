@@ -65,6 +65,12 @@ export const mapAdminSchoolForList = (school) => {
 
     parentStats: school?.parentStats || { total: 0, loggedIn: 0, neverLoggedIn: 0 },
 
+    activityStats: school?.activityStats || {
+      teacherStats: { total: 0, active: 0, activeToday: 0 },
+      studentStats: { total: 0, active: 0, attendanceToday: false, lastAttendanceDate: null },
+      dailyUsage: { status: 'inactive', label: 'Inactive', lastActivityAt: null, attendanceMarkedToday: false, noticeSentToday: false },
+    },
+
     registeredOn: school?.audit?.createdAt
       ? formatOrderDateShort(school.audit.createdAt)
       : '',

@@ -138,6 +138,137 @@ const getParentStatsBySchoolIds = async (schoolIds) => {
 };
 
 /**
+ * Computes teacher stats, student stats, attendance today, and daily platform usage status for school IDs.
+ */
+const getActivityStatsBySchoolIds = async (schoolIds) => {
+  const statsMap = new Map();
+  if (!schoolIds || !schoolIds.length) return statsMap;
+
+  schoolIds.forEach((id) => {
+    statsMap.set(String(id), {
+      teacherStats: { total: 0, active: 0, activeToday: 0 },
+      studentStats: { total: 0, active: 0, attendanceToday: false, lastAttendanceDate: null },
+      dailyUsage: { status: 'inactive', label: 'Inactive', lastActivityAt: null, attendanceMarkedToday: false, noticeSentToday: false },
+    });
+  });
+
+  const TeacherProfile = require('../../../database/models/TeacherProfile');
+  const Student = require('../../../database/models/Student');
+  const AttendanceRecord = require('../../../database/models/AttendanceRecord');
+  const Notice = require('../../../database/models/Notice');
+  const User = require('../../../database/models/User');
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const sevenDaysAgo = new Date(startOfToday);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  // 1. Fetch Teachers per School
+  const teachers = await TeacherProfile.find({
+    schoolId: { $in: schoolIds },
+    'softDelete.isDeleted': { $ne: true },
+  }).select('schoolId approvalStatus userId').lean();
+
+  const teacherUserIds = teachers.map((t) => t.userId).filter(Boolean);
+
+  let teacherUsersMap = new Map();
+  if (teacherUserIds.length) {
+    const teacherUsers = await User.find({
+      _id: { $in: teacherUserIds },
+      'softDelete.isDeleted': { $ne: true },
+    }).select('_id lastLoginAt').lean();
+    teacherUsersMap = new Map(teacherUsers.map((u) => [String(u._id), u.lastLoginAt]));
+  }
+
+  teachers.forEach((t) => {
+    const sId = String(t.schoolId);
+    if (!statsMap.has(sId)) return;
+    const stats = statsMap.get(sId);
+    stats.teacherStats.total += 1;
+    if (t.approvalStatus === 'approved') {
+      stats.teacherStats.active += 1;
+    }
+    const lastLogin = teacherUsersMap.get(String(t.userId));
+    if (lastLogin && new Date(lastLogin) >= startOfToday) {
+      stats.teacherStats.activeToday += 1;
+    }
+  });
+
+  // 2. Fetch Students per School
+  const students = await Student.find({
+    schoolId: { $in: schoolIds },
+    'softDelete.isDeleted': { $ne: true },
+  }).select('schoolId status').lean();
+
+  students.forEach((s) => {
+    const sId = String(s.schoolId);
+    if (!statsMap.has(sId)) return;
+    const stats = statsMap.get(sId);
+    stats.studentStats.total += 1;
+    if (s.status === 'active') {
+      stats.studentStats.active += 1;
+    }
+  });
+
+  // 3. Fetch Attendance Records for today and last activity
+  const attendanceRecords = await AttendanceRecord.find({
+    schoolId: { $in: schoolIds },
+  }).select('schoolId date audit').sort({ date: -1 }).lean();
+
+  attendanceRecords.forEach((att) => {
+    const sId = String(att.schoolId);
+    if (!statsMap.has(sId)) return;
+    const stats = statsMap.get(sId);
+    const attDate = new Date(att.date || att.audit?.createdAt);
+    if (attDate >= startOfToday) {
+      stats.studentStats.attendanceToday = true;
+      stats.dailyUsage.attendanceMarkedToday = true;
+    }
+    if (!stats.studentStats.lastAttendanceDate || attDate > new Date(stats.studentStats.lastAttendanceDate)) {
+      stats.studentStats.lastAttendanceDate = attDate;
+    }
+  });
+
+  // 4. Fetch Notices for today
+  const recentNotices = await Notice.find({
+    schoolId: { $in: schoolIds },
+    publishDate: { $gte: sevenDaysAgo },
+  }).select('schoolId publishDate audit').lean();
+
+  recentNotices.forEach((notice) => {
+    const sId = String(notice.schoolId);
+    if (!statsMap.has(sId)) return;
+    const stats = statsMap.get(sId);
+    const pubDate = new Date(notice.publishDate || notice.audit?.createdAt);
+    if (pubDate >= startOfToday) {
+      stats.dailyUsage.noticeSentToday = true;
+    }
+  });
+
+  // 5. Finalize Daily Usage Status for each school
+  statsMap.forEach((stats) => {
+    const hasTodayActivity = stats.dailyUsage.attendanceMarkedToday || stats.dailyUsage.noticeSentToday || stats.teacherStats.activeToday > 0;
+    const lastAtt = stats.studentStats.lastAttendanceDate ? new Date(stats.studentStats.lastAttendanceDate) : null;
+    const hasWeekActivity = hasTodayActivity || (lastAtt && lastAtt >= sevenDaysAgo);
+
+    if (hasTodayActivity) {
+      stats.dailyUsage.status = 'active_today';
+      stats.dailyUsage.label = 'Active Today';
+    } else if (hasWeekActivity) {
+      stats.dailyUsage.status = 'active_week';
+      stats.dailyUsage.label = 'Active This Week';
+    } else {
+      stats.dailyUsage.status = 'inactive';
+      stats.dailyUsage.label = 'Inactive';
+    }
+    stats.dailyUsage.lastActivityAt = lastAtt;
+  });
+
+  return statsMap;
+};
+
+/**
  * Resolves each school's admin user in one query and folds in the computed
  * display status plus the contact fields the admin table needs. Without this the
  * list has no phone number and cannot tell a rejected school from a pending one.
@@ -146,11 +277,12 @@ const decorateSchools = async (schools) => {
   if (!schools.length) return schools;
 
   const ids = schools.map((s) => s._id).filter(Boolean);
-  const [admins, parentStatsMap] = await Promise.all([
+  const [admins, parentStatsMap, activityStatsMap] = await Promise.all([
     User.find({ tenantSchoolId: { $in: ids }, role: 'school' })
       .sort({ 'audit.createdAt': 1 })
       .lean(),
     getParentStatsBySchoolIds(ids),
+    getActivityStatsBySchoolIds(ids),
   ]);
 
   // First admin per school wins, matching findAdminUser's ordering.
@@ -163,6 +295,12 @@ const decorateSchools = async (schools) => {
   return schools.map((school) => {
     const admin = bySchool.get(String(school._id)) || {};
     const parentStats = parentStatsMap.get(String(school._id)) || { total: 0, loggedIn: 0, neverLoggedIn: 0 };
+    const activityStats = activityStatsMap.get(String(school._id)) || {
+      teacherStats: { total: 0, active: 0, activeToday: 0 },
+      studentStats: { total: 0, active: 0, attendanceToday: false, lastAttendanceDate: null },
+      dailyUsage: { status: 'inactive', label: 'Inactive', lastActivityAt: null, attendanceMarkedToday: false, noticeSentToday: false },
+    };
+
     return {
       ...school,
       status: mapSchoolDisplayStatus(school, admin),
@@ -171,6 +309,7 @@ const decorateSchools = async (schools) => {
       adminEmail: school.adminEmail || admin.email || null,
       adminUserStatus: admin.status || null,
       parentStats,
+      activityStats,
     };
   });
 };

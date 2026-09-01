@@ -8,6 +8,7 @@ const { disconnectDB } = require('./database/connection');
 const { connectStateStore, disconnectStateStore } = require('./common/stateStore');
 const { startOutboxWorker, stopOutboxWorker } = require('./services/outbox');
 const { registerDeliveryWorkers, stopDeliveryWorkers } = require('./modules/delivery/workers');
+const { startBirthdayScheduler, stopBirthdayScheduler } = require('./services/notification/birthdayScheduler');
 const emailService = require('./common/email');
 const config = require('./config');
 const logger = require('./common/logger');
@@ -34,6 +35,7 @@ const shutdown = async (signal, exitCode = 0) => {
   try {
     stopOutboxWorker(outboxWorkerTimer);
     stopDeliveryWorkers();
+    stopBirthdayScheduler();
     if (scheduledNoticeWorkerTimer) clearInterval(scheduledNoticeWorkerTimer);
     if (unpaidOrderSweeperTimer) clearInterval(unpaidOrderSweeperTimer);
 
@@ -126,6 +128,7 @@ const bootstrap = async () => {
   }, 5 * 60 * 1000);
 
   server = await startServer();
+  startBirthdayScheduler();
 };
 
 bootstrap().catch((error) => {

@@ -5,21 +5,26 @@ const tokenService = require('./token.service');
 
 const notificationService = {
   async createInAppRecord({ userId, title, body, type, channel = 'push', actionUrl, payload, campaignId }) {
-    const [record] = await Notification.create([
-      {
-        userId,
-        title,
-        body,
-        type,
-        channel,
-        actionUrl,
-        payload,
-        campaignId,
-        status: 'pending',
-        isRead: false,
-      },
-    ]);
-    return record.toObject();
+    try {
+      const [record] = await Notification.create([
+        {
+          userId,
+          title,
+          body,
+          type,
+          channel,
+          actionUrl,
+          payload,
+          campaignId,
+          status: 'pending',
+          isRead: false,
+        },
+      ]);
+      return record.toObject();
+    } catch (err) {
+      logger.error('createInAppRecord error', { message: err.message, stack: err.stack });
+      throw err;
+    }
   },
 
   async sendToUser(userId, { notification, data, type = 'system', channel = 'push', persist = true, campaignId }) {
@@ -71,7 +76,7 @@ const notificationService = {
   },
 
   async sendToUsers(userIds, payload) {
-    const uniqueUserIds = [...new Set(userIds.map(String))];
+    const uniqueUserIds = [...new Set((userIds || []).map(String))];
     const results = await Promise.allSettled(
       uniqueUserIds.map((userId) => this.sendToUser(userId, payload))
     );

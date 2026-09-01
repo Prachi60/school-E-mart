@@ -69,6 +69,14 @@ const platformSettingsSchema = new mongoose.Schema(
     lms: {
       maxVideoSizeMB: { type: Number, default: 500, min: 10, max: 5000 },
     },
+    kits: {
+      // Auto-hide a school kit from parents once it has been on sale for
+      // `purchaseWindowDays` days without them buying it. Off by default —
+      // switching it on immediately closes the window on every kit already
+      // published longer ago than that.
+      purchaseWindowEnabled: { type: Boolean, default: false },
+      purchaseWindowDays: { type: Number, default: 7, min: 1, max: 365 },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     updatedAt: { type: Date, default: Date.now },
   },

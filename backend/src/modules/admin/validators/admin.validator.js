@@ -52,7 +52,7 @@ const lmsGradeSchema = Joi.object({
 });
 const settingsSectionParam = Joi.object({
   section: Joi.string()
-    .valid('general', 'marketplace', 'orders', 'school', 'security', 'billing', 'contact')
+    .valid('general', 'marketplace', 'orders', 'school', 'security', 'billing', 'contact', 'lms', 'kits')
     .required(),
 });
 const landingSlugParam = Joi.object({
@@ -324,6 +324,14 @@ const lmsSettingsSchema = Joi.object({
   maxVideoSizeMB: Joi.number().integer().min(10).max(5000).optional(),
 });
 
+// How long a kit stays purchasable to parents after it is published. Bounded at
+// one day so the admin can't configure a window that closes kits the moment a
+// school publishes them.
+const kitsSettingsSchema = Joi.object({
+  purchaseWindowEnabled: Joi.boolean().optional(),
+  purchaseWindowDays: Joi.number().integer().min(1).max(365).optional(),
+});
+
 const settingsBodyBySection = {
   general: generalSettingsSchema,
   marketplace: marketplaceSettingsSchema,
@@ -333,6 +341,7 @@ const settingsBodyBySection = {
   billing: billingSettingsSchema,
   contact: contactSettingsSchema,
   lms: lmsSettingsSchema,
+  kits: kitsSettingsSchema,
 };
 
 const payoutIdParam = Joi.object({ payoutId: objectId.required() });

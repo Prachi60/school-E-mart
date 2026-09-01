@@ -9,8 +9,17 @@ const kitsService = require('../services/kits.service');
 // (parents, teachers, vendors) must only ever be served published kits — a
 // client-supplied `status` query param must not be able to override that, and
 // neither should knowing/guessing a kit's id.
+//
+// The admin's kit sale window is a narrower rule: it governs what a parent may
+// still BUY, so it applies to parents only. A teacher or a vendor reading a kit
+// for reference shouldn't watch it disappear. `viewerUserId` rides along
+// because a kit the parent already bought stays visible past its deadline.
 const KIT_MANAGE_ROLES = [ROLES.SUPER_ADMIN, ROLES.SCHOOL_ADMIN];
-const kitViewOptions = (req) => ({ requireActive: !KIT_MANAGE_ROLES.includes(req.auth?.role) });
+const kitViewOptions = (req) => ({
+  requireActive: !KIT_MANAGE_ROLES.includes(req.auth?.role),
+  applyPurchaseWindow: req.auth?.role === ROLES.PARENT,
+  viewerUserId: req.auth?.userId || null,
+});
 
 const academicsController = {
   // Events

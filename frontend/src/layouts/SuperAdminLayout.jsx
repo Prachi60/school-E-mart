@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Layers, Box, Users, MapPin, Ticket, Truck,
   ChevronDown, ChevronRight, Search, Bell, User, LogOut, Menu, X, ShieldAlert,
   ArrowLeftRight, Wallet, TrendingUp, Coins, HelpCircle, ShoppingCart, Clock, CheckCircle,
-  FileText, Flag, XCircle, Package, Home, Store, Image, IndianRupee, Video, GraduationCap, School, Phone, MonitorPlay
+  FileText, Flag, XCircle, Package, Home, Store, Image, IndianRupee, Video, GraduationCap, School, Phone, MonitorPlay, Hourglass
 } from 'lucide-react';
 import useAuthStore from '../store/useAuthStore';
 
@@ -226,6 +226,12 @@ const SuperAdminLayout = () => {
       label: 'Billing & Charges',
       icon: IndianRupee,
       path: '/superadmin/setting-billing-charges'
+    },
+    {
+      type: 'item',
+      label: 'Kit Sale Window',
+      icon: Hourglass,
+      path: '/superadmin/setting-kit-sale-window'
     },
     {
       type: 'item',

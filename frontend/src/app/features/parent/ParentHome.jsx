@@ -22,6 +22,7 @@ import RecentUpdates from './RecentUpdates';
 import QuickActions from './QuickActions';
 import ParentLearningHub from './ParentLearningHub';
 import RecommendedKits from './RecommendedKits';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 import PromoCategoryBanners from './PromoCategoryBanners';
 import ReelsRow from './ReelsRow';
 import { useCategoryTree } from '../../../hooks/useCategoryTree';
@@ -448,95 +449,107 @@ const ParentHome = () => {
                   <div
                     key={id}
                     onClick={() => navigate(`/user/kit/${id}`)}
-                    className={`bg-white rounded-2xl p-3.5 border transition-all shadow-2xs hover:shadow-md flex items-center justify-between gap-3 relative overflow-hidden cursor-pointer active:scale-[0.99] ${
+                    className={`bg-white rounded-2xl p-3.5 border transition-all shadow-2xs hover:shadow-md flex flex-col gap-2.5 relative overflow-hidden cursor-pointer active:scale-[0.99] ${
                       isPurchased
                         ? 'border-emerald-300 bg-emerald-50/20'
                         : 'border-gray-200/80 hover:border-[#3b2d7d]/40'
                     }`}
                   >
-                    {/* Left Thumbnail + Info Stack */}
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <div className="w-16 h-16 rounded-xl bg-gray-50 border border-gray-150 p-1 shrink-0 overflow-hidden flex items-center justify-center">
-                        {avatar ? (
-                          <img src={avatar} alt={kit.name} className="w-full h-full object-contain" />
+                    <div className="flex items-center justify-between gap-3">
+                      {/* Left Thumbnail + Info Stack */}
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="w-16 h-16 rounded-xl bg-gray-50 border border-gray-150 p-1 shrink-0 overflow-hidden flex items-center justify-center">
+                          {avatar ? (
+                            <img src={avatar} alt={kit.name} className="w-full h-full object-contain" />
+                          ) : (
+                            <Package size={24} className="text-purple-300" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          {/* Category & Status Badges */}
+                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                            <span className="px-2 py-0.5 bg-purple-50 text-[#3b2d7d] border border-purple-100 rounded-md text-[9px] font-black uppercase tracking-wider">
+                              {kit.category || 'General Kit'}
+                            </span>
+                            {isPurchased ? (
+                              <span className="px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-0.5 shadow-2xs">
+                                <CheckCircle2 size={10} className="stroke-[3]" />
+                                Purchased
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[8px] font-black uppercase tracking-wider">
+                                Required
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Kit Name */}
+                          <h3 className="text-xs font-black text-gray-900 leading-snug truncate">
+                            {kit.name}
+                          </h3>
+
+                          {/* Items & Grade */}
+                          <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-gray-400">
+                            <span className="flex items-center gap-0.5">
+                              <Package size={10} className="text-[#3b2d7d]" />
+                              {itemsCount} Items
+                            </span>
+                            <span>•</span>
+                            <span>{kit.classGrade || childInfo.grade || 'All Classes'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Price & CTA */}
+                      <div className="flex flex-col items-end justify-between self-stretch shrink-0 py-0.5 pl-3 border-l border-gray-100">
+                        <div className="text-right">
+                          <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Price</span>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-sm font-black text-[#3b2d7d] leading-none">₹{price}</span>
+                            {mrp && Number(mrp) > Number(price) && (
+                              <span className="text-[10px] text-gray-400 font-bold line-through">₹{mrp}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {isPurchased ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/user/kit/${id}`);
+                            }}
+                            className="mt-2 px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-black text-[10px] uppercase rounded-lg transition-all flex items-center gap-1 active:scale-95"
+                          >
+                            <Check size={11} className="stroke-[3]" />
+                            <span>View</span>
+                          </button>
                         ) : (
-                          <Package size={24} className="text-purple-300" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/user/kit/${id}`);
+                            }}
+                            className="mt-2 px-3.5 py-1.5 bg-[#3b2d7d] hover:bg-[#2c2060] text-white font-black text-[10px] uppercase rounded-lg shadow-xs transition-all flex items-center gap-1 active:scale-95"
+                          >
+                            <ShoppingCart size={11} />
+                            <span>Buy</span>
+                          </button>
                         )}
                       </div>
-
-                      <div className="min-w-0 flex-1">
-                        {/* Category & Status Badges */}
-                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                          <span className="px-2 py-0.5 bg-purple-50 text-[#3b2d7d] border border-purple-100 rounded-md text-[9px] font-black uppercase tracking-wider">
-                            {kit.category || 'General Kit'}
-                          </span>
-                          {isPurchased ? (
-                            <span className="px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-0.5 shadow-2xs">
-                              <CheckCircle2 size={10} className="stroke-[3]" />
-                              Purchased
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[8px] font-black uppercase tracking-wider">
-                              Required
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Kit Name */}
-                        <h3 className="text-xs font-black text-gray-900 leading-snug truncate">
-                          {kit.name}
-                        </h3>
-
-                        {/* Items & Grade */}
-                        <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-gray-400">
-                          <span className="flex items-center gap-0.5">
-                            <Package size={10} className="text-[#3b2d7d]" />
-                            {itemsCount} Items
-                          </span>
-                          <span>•</span>
-                          <span>{kit.classGrade || childInfo.grade || 'All Classes'}</span>
-                        </div>
-                      </div>
                     </div>
 
-                    {/* Right Column: Price & CTA */}
-                    <div className="flex flex-col items-end justify-between self-stretch shrink-0 py-0.5 pl-3 border-l border-gray-100">
-                      <div className="text-right">
-                        <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Price</span>
-                        <div className="flex items-baseline gap-1">
-                          <span className="text-sm font-black text-[#3b2d7d] leading-none">₹{price}</span>
-                          {mrp && Number(mrp) > Number(price) && (
-                            <span className="text-[10px] text-gray-400 font-bold line-through">₹{mrp}</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {isPurchased ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/user/kit/${id}`);
-                          }}
-                          className="mt-2 px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-black text-[10px] uppercase rounded-lg transition-all flex items-center gap-1 active:scale-95"
-                        >
-                          <Check size={11} className="stroke-[3]" />
-                          <span>View</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/user/kit/${id}`);
-                          }}
-                          className="mt-2 px-3.5 py-1.5 bg-[#3b2d7d] hover:bg-[#2c2060] text-white font-black text-[10px] uppercase rounded-lg shadow-xs transition-all flex items-center gap-1 active:scale-95"
-                        >
-                          <ShoppingCart size={11} />
-                          <span>Buy</span>
-                        </button>
-                      )}
-                    </div>
+                    {/* Live for the whole window, from the day the school
+                        published the kit to the moment it closes. */}
+                    {!isPurchased && (
+                      <KitSaleCountdown
+                        startsAt={kit.purchaseWindow?.startsAt}
+                        endsAt={kit.purchaseWindow?.endsAt}
+                        onExpire={kitStats.reload}
+                      />
+                    )}
                   </div>
                 );
               })}
