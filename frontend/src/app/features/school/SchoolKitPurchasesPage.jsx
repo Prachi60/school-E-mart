@@ -3,8 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Search, Users, CheckCircle2, XCircle, Package,
   Loader2, AlertCircle, ShoppingBag, Phone, Mail, CreditCard,
+  Timer, TimerOff,
 } from 'lucide-react';
 import { getKitPurchases } from '../../../services/schoolApi';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 import { useSchoolId } from '../../../utils/schoolContext';
 import { getErrorMessage } from '../../../utils/apiHelpers';
 
@@ -127,6 +129,43 @@ const SchoolKitPurchasesPage = () => {
               </div>
             </div>
           </div>
+
+          {/* Why the Not Purchased list may have stopped moving: once the sale
+              window closes, none of the students left on it can still buy. */}
+          {report.kit?.purchaseWindow?.endsAt && (
+            <div className="px-6 pt-4">
+              {report.kit.purchaseWindow.expired ? (
+                <div className="p-4 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-start gap-2.5">
+                  <TimerOff size={18} className="shrink-0 text-rose-500 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-rose-800">
+                      Sale window closed on{' '}
+                      {new Date(report.kit.purchaseWindow.endsAt).toLocaleDateString('en-GB')}
+                    </p>
+                    <p className="text-[11px] font-bold text-rose-700/80 mt-0.5 leading-relaxed">
+                      This kit is hidden from parents who never bought it, so the{' '}
+                      {report.notPurchasedCount} student{report.notPurchasedCount === 1 ? '' : 's'} below
+                      can no longer order it. Re-publish the kit from the kits list to reopen the window.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5">
+                  <Timer size={18} className="shrink-0 text-amber-600 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs font-black text-amber-900">Sale window still open</p>
+                      <KitSaleCountdown endsAt={report.kit.purchaseWindow.endsAt} variant="admin" />
+                    </div>
+                    <p className="text-[11px] font-bold text-amber-800/80 mt-0.5 leading-relaxed">
+                      After that the kit auto-hides from the {report.notPurchasedCount} student
+                      {report.notPurchasedCount === 1 ? '' : 's'} who haven&apos;t bought it yet.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {report.kit?.classGrade && (
             <p className="px-6 pt-3 text-[11px] font-bold text-gray-400">

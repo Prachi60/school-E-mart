@@ -336,6 +336,18 @@ export const updateBillingConfig = async (payload) => {
   return unwrapData(response)?.section;
 };
 
+// Kit sale window: how long a published school kit stays visible/purchasable to
+// parents before it auto-hides. Read by every parent-facing kit endpoint.
+export const getKitSettings = async () => {
+  const response = await apiClient.get('/admin/settings/kits');
+  return unwrapData(response)?.section || { purchaseWindowEnabled: false, purchaseWindowDays: 7 };
+};
+
+export const updateKitSettings = async (payload) => {
+  const response = await apiClient.put('/admin/settings/kits', payload);
+  return unwrapData(response)?.section || payload;
+};
+
 export const getContactSettings = async () => {
   const response = await apiClient.get('/admin/cms/contact');
   return unwrapData(response)?.content;

@@ -6,6 +6,11 @@ const orderAccessPolicy = require('../policies/orderAccess.policy');
 const BillingConfig = require('../../../database/models/BillingConfig');
 const Kit = require('../../../database/models/Kit');
 const { validateAndNormalizeKitSelections } = require('../../marketplace/utils/kitSelection.util');
+const {
+  getKitPurchaseWindow,
+  isKitPurchaseWindowOpen,
+  KIT_PURCHASE_WINDOW_CLOSED,
+} = require('../../academics/utils/kitPurchaseWindow.util');
 
 // Fallbacks used only if the admin has never saved a BillingConfig. Real values
 // come from the admin's Billing & Charges page and are resolved per checkout.
@@ -36,6 +41,15 @@ const checkoutService = {
         // can go from active to draft/deleted/vendor-less in between.
         const kit = await Kit.findOne(Kit.purchasableFilter(item.productId)).lean();
         if (kit) {
+          // The admin's sale window can also have closed while the kit sat in
+          // the cart — placing the order is the last point it can be caught.
+          if (!isKitPurchaseWindowOpen(kit, await getKitPurchaseWindow())) {
+            throw new BadRequestError(
+              `"${kit.name}" is no longer available — its purchase window has closed.`,
+              null,
+              KIT_PURCHASE_WINDOW_CLOSED
+            );
+          }
           // Re-validate the parent's size/color picks against the live kit —
           // the school may have edited or removed an option since it was added
           // to the cart, so the choice made then can no longer be trusted blind.

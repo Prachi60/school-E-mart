@@ -5,6 +5,26 @@ const variantRepository = require('../repositories/variant.repository');
 const productService = require('./product.service');
 const Kit = require('../../../database/models/Kit');
 const { validateAndNormalizeKitSelections } = require('../utils/kitSelection.util');
+const {
+  getKitPurchaseWindow,
+  isKitPurchaseWindowOpen,
+  KIT_PURCHASE_WINDOW_CLOSED,
+} = require('../../academics/utils/kitPurchaseWindow.util');
+
+// Kit.purchasableFilter can't see the admin's sale window (it needs a settings
+// read), so every path that turns a kit into money re-checks it here. A closed
+// window has to block the cart too, not just the browse screens — otherwise a
+// kit sitting in a cart from before the deadline would still check out.
+const assertKitPurchaseWindowOpen = async (kit) => {
+  const window = await getKitPurchaseWindow();
+  if (!isKitPurchaseWindowOpen(kit, window)) {
+    throw new BadRequestError(
+      `"${kit.name}" is no longer available — its purchase window has closed.`,
+      null,
+      KIT_PURCHASE_WINDOW_CLOSED
+    );
+  }
+};
 
 const itemKey = (productId, variantId) => `${productId}:${variantId || 'base'}`;
 
@@ -48,6 +68,7 @@ const cartService = {
       if (!product) {
         const kit = await Kit.findOne(Kit.purchasableFilter(item.productId)).lean();
         if (kit) {
+          await assertKitPurchaseWindowOpen(kit);
           const kitImg =
             kit.imageUrl ||
             kit.items?.find((i) => i.imageUrl)?.imageUrl ||
@@ -96,6 +117,7 @@ const cartService = {
     if (!product) {
       const kit = await Kit.findOne(Kit.purchasableFilter(payload.productId)).lean();
       if (kit) {
+        await assertKitPurchaseWindowOpen(kit);
         isKit = true;
         kitDoc = kit;
         const kitImg =

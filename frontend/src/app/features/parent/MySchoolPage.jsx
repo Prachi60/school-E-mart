@@ -15,6 +15,7 @@ import { getSchool, listNotices } from '../../../services/schoolApi';
 import { toAbsoluteUrl } from '../../../utils/url';
 import { getChildInfoFromStorage, useChildInfo } from '../../../utils/parentContext';
 import { useKitProcurementProgress } from '../../../hooks/useKitProcurementProgress';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 import useAuthStore from '../../../store/useAuthStore';
 
 const MySchoolPage = () => {
@@ -81,6 +82,9 @@ const MySchoolPage = () => {
       mrp,
       avatar,
       isPurchased: progress.isPurchased(k),
+      // Both null unless the admin has the kit sale window switched on.
+      saleStartsAt: k.purchaseWindow?.startsAt || null,
+      saleEndsAt: k.purchaseWindow?.endsAt || null,
       raw: k,
     };
   });
@@ -333,92 +337,106 @@ const MySchoolPage = () => {
                     {displayedKits.map((kit) => (
                       <div
                         key={kit.id}
-                        className={`bg-white rounded-2xl p-3.5 border transition-all shadow-2xs hover:shadow-md flex items-center justify-between gap-3 relative overflow-hidden ${
+                        className={`bg-white rounded-2xl p-3.5 border transition-all shadow-2xs hover:shadow-md flex flex-col gap-2.5 relative overflow-hidden ${
                           kit.isPurchased
                             ? 'border-emerald-300 bg-emerald-50/20'
                             : 'border-gray-200/80 hover:border-[#3b2d7d]/40'
                         }`}
                       >
-                        {/* Left Thumbnail + Info Stack */}
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-gray-50 border border-gray-150 p-1 shrink-0 overflow-hidden flex items-center justify-center">
-                            {kit.avatar ? (
-                              <img src={kit.avatar} alt={kit.name} className="w-full h-full object-contain" />
+                        <div className="flex items-center justify-between gap-3">
+                          {/* Left Thumbnail + Info Stack */}
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-gray-50 border border-gray-150 p-1 shrink-0 overflow-hidden flex items-center justify-center">
+                              {kit.avatar ? (
+                                <img src={kit.avatar} alt={kit.name} className="w-full h-full object-contain" />
+                              ) : (
+                                <Package size={24} className="text-purple-300" />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              {/* Category & Purchased Status Pills */}
+                              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                                <span className="px-2 py-0.5 bg-purple-50 text-[#3b2d7d] border border-purple-100 rounded-md text-[9px] font-black uppercase tracking-wider">
+                                  {kit.category}
+                                </span>
+                                {kit.isPurchased ? (
+                                  <span className="px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-0.5 shadow-2xs">
+                                    <CheckCircle2 size={10} className="stroke-[3]" />
+                                    Purchased
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[8px] font-black uppercase tracking-wider">
+                                    Required
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Kit Name */}
+                              <h3 className="text-xs font-black text-gray-900 leading-snug truncate">
+                                {kit.name}
+                              </h3>
+
+                              {/* Items & Class grade info */}
+                              <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-gray-400">
+                                <span className="flex items-center gap-0.5">
+                                  <Users size={10} className="text-[#3b2d7d]" />
+                                  {kit.classes}
+                                </span>
+                                <span>•</span>
+                                <span className="flex items-center gap-0.5">
+                                  <Package size={10} className="text-[#3b2d7d]" />
+                                  {kit.itemsCount} Items
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Right Column: Price & CTA Action */}
+                          <div className="flex flex-col items-end justify-between self-stretch shrink-0 py-0.5 pl-3 border-l border-gray-100">
+                            <div className="text-right">
+                              <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Price</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-sm font-black text-[#3b2d7d] leading-none">₹{kit.price}</span>
+                                {kit.mrp && Number(kit.mrp) > Number(kit.price) && (
+                                  <span className="text-[10px] text-gray-400 font-bold line-through">₹{kit.mrp}</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {kit.isPurchased ? (
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/user/kit/${kit.id}`)}
+                                className="mt-2 px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-black text-[10px] uppercase rounded-lg transition-all flex items-center gap-1 active:scale-95"
+                              >
+                                <Check size={11} className="stroke-[3]" />
+                                <span>View</span>
+                              </button>
                             ) : (
-                              <Package size={24} className="text-purple-300" />
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/user/kit/${kit.id}`)}
+                                className="mt-2 px-3.5 py-1.5 bg-[#3b2d7d] hover:bg-[#2c2060] text-white font-black text-[10px] uppercase rounded-lg shadow-xs transition-all flex items-center gap-1 active:scale-95"
+                              >
+                                <ShoppingCart size={11} />
+                                <span>Buy</span>
+                              </button>
                             )}
                           </div>
-
-                          <div className="min-w-0 flex-1">
-                            {/* Category & Purchased Status Pills */}
-                            <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                              <span className="px-2 py-0.5 bg-purple-50 text-[#3b2d7d] border border-purple-100 rounded-md text-[9px] font-black uppercase tracking-wider">
-                                {kit.category}
-                              </span>
-                              {kit.isPurchased ? (
-                                <span className="px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-0.5 shadow-2xs">
-                                  <CheckCircle2 size={10} className="stroke-[3]" />
-                                  Purchased
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[8px] font-black uppercase tracking-wider">
-                                  Required
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Kit Name */}
-                            <h3 className="text-xs font-black text-gray-900 leading-snug truncate">
-                              {kit.name}
-                            </h3>
-
-                            {/* Items & Class grade info */}
-                            <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-gray-400">
-                              <span className="flex items-center gap-0.5">
-                                <Users size={10} className="text-[#3b2d7d]" />
-                                {kit.classes}
-                              </span>
-                              <span>•</span>
-                              <span className="flex items-center gap-0.5">
-                                <Package size={10} className="text-[#3b2d7d]" />
-                                {kit.itemsCount} Items
-                              </span>
-                            </div>
-                          </div>
                         </div>
 
-                        {/* Right Column: Price & CTA Action */}
-                        <div className="flex flex-col items-end justify-between self-stretch shrink-0 py-0.5 pl-3 border-l border-gray-100">
-                          <div className="text-right">
-                            <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider block">Price</span>
-                            <div className="flex items-baseline gap-1">
-                              <span className="text-sm font-black text-[#3b2d7d] leading-none">₹{kit.price}</span>
-                              {kit.mrp && Number(kit.mrp) > Number(kit.price) && (
-                                <span className="text-[10px] text-gray-400 font-bold line-through">₹{kit.mrp}</span>
-                              )}
-                            </div>
-                          </div>
-
-                          {kit.isPurchased ? (
-                            <button
-                              type="button"
-                              onClick={() => navigate(`/user/kit/${kit.id}`)}
-                              className="mt-2 px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-black text-[10px] uppercase rounded-lg transition-all flex items-center gap-1 active:scale-95"
-                            >
-                              <Check size={11} className="stroke-[3]" />
-                              <span>View</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => navigate(`/user/kit/${kit.id}`)}
-                              className="mt-2 px-3.5 py-1.5 bg-[#3b2d7d] hover:bg-[#2c2060] text-white font-black text-[10px] uppercase rounded-lg shadow-xs transition-all flex items-center gap-1 active:scale-95"
-                            >
-                              <ShoppingCart size={11} />
-                              <span>Buy</span>
-                            </button>
-                          )}
-                        </div>
+                        {/* Live for the whole window, from the day the school
+                            published the kit to the moment it closes. Hitting
+                            zero removes the kit from this list, so refetch
+                            rather than leave a card that can't be bought. */}
+                        {!kit.isPurchased && (
+                          <KitSaleCountdown
+                            startsAt={kit.saleStartsAt}
+                            endsAt={kit.saleEndsAt}
+                            onExpire={progress.reload}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>

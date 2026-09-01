@@ -51,6 +51,149 @@ const invoiceService = {
       email: '',
     };
 
+    // 3. Resolve Academic & Student Info (Student, Class, Class Teacher)
+    let studentDetails = null;
+    try {
+      const ParentProfile = require('../../../database/models/ParentProfile');
+      const ChildProfile = require('../../../database/models/ChildProfile');
+      const Student = require('../../../database/models/Student');
+      const School = require('../../../database/models/School');
+      const TeacherProfile = require('../../../database/models/TeacherProfile');
+      const Kit = require('../../../database/models/Kit');
+
+      let studentName = null;
+      let classGrade = null;
+      let section = null;
+      let schoolId = null;
+      let schoolRefNo = null;
+      let rollNo = null;
+      let admissionNo = null;
+
+      if (order.userId && mongoose.Types.ObjectId.isValid(String(order.userId))) {
+        const parentProfile = await ParentProfile.findOne({ userId: order.userId }).lean();
+        if (parentProfile) {
+          let childDoc = null;
+          if (parentProfile.activeChildId) {
+            childDoc = await ChildProfile.findById(parentProfile.activeChildId).lean();
+          }
+          if (!childDoc) {
+            childDoc = await ChildProfile.findOne({ parentUserId: order.userId }).lean();
+          }
+
+          if (childDoc) {
+            studentName = childDoc.name || null;
+            classGrade = childDoc.grade || null;
+            schoolId = childDoc.schoolId || null;
+            schoolRefNo = childDoc.schoolRefNo || null;
+            rollNo = childDoc.rollNo || null;
+
+            if (childDoc.studentId) {
+              const studentDoc = await Student.findById(childDoc.studentId).lean();
+              if (studentDoc) {
+                studentName = studentDoc.name || studentName;
+                classGrade = studentDoc.classGrade || classGrade;
+                section = studentDoc.section || null;
+                schoolId = studentDoc.schoolId || schoolId;
+                admissionNo = studentDoc.admissionNo || null;
+                rollNo = studentDoc.rollNo || rollNo;
+                schoolRefNo = studentDoc.schoolRefNo || schoolRefNo;
+              }
+            }
+          }
+        }
+      }
+
+      // If missing schoolId or classGrade, check order items (e.g. kit items)
+      if (!classGrade || !schoolId) {
+        for (const item of (order.items || [])) {
+          if (item.schoolId && !schoolId) {
+            schoolId = item.schoolId;
+          }
+          if (item.kitId) {
+            const kit = await Kit.findById(item.kitId).lean();
+            if (kit) {
+              if (!classGrade && kit.classGrade) classGrade = kit.classGrade;
+              if (!schoolId && kit.schoolId) schoolId = kit.schoolId;
+            }
+          }
+        }
+      }
+
+      if (!schoolId && order.schoolIdForPickup) {
+        schoolId = order.schoolIdForPickup;
+      }
+
+      let schoolName = null;
+      if (schoolId) {
+        const schoolDoc = await School.findById(schoolId).select('name').lean();
+        schoolName = schoolDoc?.name || null;
+      }
+
+      let classTeacherName = null;
+      if (schoolId && classGrade) {
+        const teachers = await TeacherProfile.find({
+          schoolId,
+          approvalStatus: 'approved',
+          'softDelete.isDeleted': { $ne: true },
+        }).lean();
+
+        let matchingTeacherProfile = null;
+
+        for (const teacher of teachers) {
+          const isClassTeacher = (teacher.classAssignments || []).some((assignment) => {
+            // Strictly require isClassTeacher === true
+            if (!assignment.isClassTeacher) return false;
+
+            const classMatches =
+              assignment.class &&
+              String(assignment.class).trim().toLowerCase() === String(classGrade).trim().toLowerCase();
+
+            if (!classMatches) return false;
+
+            if (section && assignment.section) {
+              return String(assignment.section).trim().toLowerCase() === String(section).trim().toLowerCase();
+            }
+
+            return true;
+          });
+
+          if (isClassTeacher) {
+            matchingTeacherProfile = teacher;
+            break;
+          }
+        }
+
+        if (matchingTeacherProfile?.userId) {
+          const teacherUser = await User.findById(matchingTeacherProfile.userId).select('name').lean();
+          classTeacherName = teacherUser?.name || null;
+        }
+      }
+
+      const rawGrade = classGrade ? String(classGrade).replace(/^(class|grade)\s+/i, '').trim() : null;
+      const cleanSection = section ? String(section).replace(/^section\s+/i, '').trim() : null;
+      const className = rawGrade
+        ? cleanSection
+          ? `Class ${rawGrade} - ${cleanSection}`
+          : `Class ${rawGrade}`
+        : null;
+
+      if (studentName || className || schoolName || classTeacherName) {
+        studentDetails = {
+          studentName: studentName || null,
+          className: className || null,
+          classGrade: classGrade || null,
+          section: section || null,
+          schoolName: schoolName || null,
+          classTeacherName: classTeacherName || null,
+          rollNo: rollNo || null,
+          admissionNo: admissionNo || null,
+          schoolRefNo: schoolRefNo || null,
+        };
+      }
+    } catch (err) {
+      // Academic details resolution failure should not block invoice building
+    }
+
     return {
       invoiceNumber: `INV-${order.orderNumber}`,
       orderId: order._id,
@@ -64,6 +207,7 @@ const invoiceService = {
         phone: customerUser?.phone || order.address?.phone || '',
         email: customerUser?.email || '',
       },
+      studentDetails,
       billingAddress: order.address || {},
       shippingAddress: order.address || {},
       gstin: order.gstin || null,

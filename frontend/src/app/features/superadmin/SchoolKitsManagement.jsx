@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, Package, School, Eye, Edit2, Trash2, CheckCircle2,
   AlertCircle, Loader2, RefreshCw, Filter, Layers, Tag, DollarSign,
-  Ban, Check, Sparkles
+  Ban, Check, Sparkles, UserX
 } from 'lucide-react';
 import { listKits, listSchools, updateKit, deleteKit } from '../../../services/schoolApi';
 import { getErrorMessage } from '../../../utils/apiHelpers';
 import { toAbsoluteUrl } from '../../../utils/url';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 
 const CATEGORY_OPTIONS = [
   'All Categories',
@@ -335,6 +336,7 @@ const SchoolKitsManagement = () => {
                   <th className="py-4 px-5">Category & Class</th>
                   <th className="py-4 px-5">Items</th>
                   <th className="py-4 px-5">Price (MRP)</th>
+                  <th className="py-4 px-5">Coverage</th>
                   <th className="py-4 px-5">Status</th>
                   <th className="py-4 px-5 text-right pr-6">Actions</th>
                 </tr>
@@ -404,17 +406,44 @@ const SchoolKitsManagement = () => {
                         </div>
                       </td>
 
-                      {/* Status */}
+                      {/* Coverage — how many of the students this kit targets
+                          still haven't got it. Blank when the school has no
+                          roster to measure against. */}
                       <td className="py-4 px-5">
-                        {kit.status === 'active' ? (
-                          <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1">
-                            <CheckCircle2 size={10} className="stroke-[3]" /> Active
+                        {kit.coverage?.eligibleCount > 0 ? (
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1 border ${
+                              kit.coverage.pendingCount > 0
+                                ? 'bg-orange-50 text-orange-700 border-orange-200/80'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200/80'
+                            }`}
+                          >
+                            <UserX size={10} className="stroke-[3]" />
+                            {kit.coverage.pendingCount} / {kit.coverage.eligibleCount} pending
                           </span>
                         ) : (
-                          <span className="px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1">
-                            <Tag size={10} /> Draft
-                          </span>
+                          <span className="text-[10px] font-bold text-gray-300">—</span>
                         )}
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-4 px-5">
+                        <div className="flex flex-col items-start gap-1">
+                          {kit.status === 'active' ? (
+                            <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200/80 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1">
+                              <CheckCircle2 size={10} className="stroke-[3]" /> Active
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[9px] font-black uppercase tracking-wider inline-flex items-center gap-1">
+                              <Tag size={10} /> Draft
+                            </span>
+                          )}
+                          {/* An active kit past its window is still listed here
+                              but unbuyable in the parent app. */}
+                          {kit.status === 'active' && (
+                            <KitSaleCountdown endsAt={kit.purchaseWindow?.endsAt} variant="admin" />
+                          )}
+                        </div>
                       </td>
 
                       {/* Actions */}

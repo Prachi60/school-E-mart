@@ -10,8 +10,19 @@ require('../../../database/models/MasterKitProduct');
 require('../../../database/models/User');
 const { NotFoundError, BadRequestError } = require('../../../common/errors');
 const { executePaginatedQuery } = require('../../../repositories');
+const {
+  getKitPurchaseWindow,
+  openWindowCondition,
+  isKitPurchaseWindowOpen,
+  decorateKitWindow,
+  KIT_PURCHASE_WINDOW_CLOSED,
+} = require('../utils/kitPurchaseWindow.util');
 
 const notDeleted = { 'softDelete.isDeleted': { $ne: true } };
+
+// Returned for a kit whose school has no student roster to measure against, so
+// the management UI never has to guard against a missing shape.
+const EMPTY_COVERAGE = { eligibleCount: 0, purchasedCount: 0, pendingCount: 0 };
 
 const DEFAULT_CATEGORIES = [
   'Textbooks & Notebooks',
@@ -99,6 +110,9 @@ const kitsService = {
       mrpPaise,
       sku: `KIT-${suffix.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`,
       status: payload.status === 'active' ? 'active' : 'draft',
+      // Starts the admin's kit sale window. Only set when the kit actually goes
+      // live — a draft hasn't been on sale to anyone yet.
+      publishedAt: payload.status === 'active' ? new Date() : null,
       // The model still carries these for schema compatibility, but nothing reads
       // them — `status` is the real switch — so they are fixed defaults, not
       // client input.
@@ -115,7 +129,15 @@ const kitsService = {
   // vendors) — they must only ever see published kits, and a client-supplied
   // `status` query param must not be able to override that. false for school/super
   // admins, who need to see and edit their own drafts.
-  async listKits(schoolId, query = {}, { requireActive = false } = {}) {
+  //
+  // applyPurchaseWindow: true only for parents, whose kits auto-hide once the
+  // admin's sale window closes. viewerUserId is whose purchase history decides
+  // which closed-window kits they nonetheless keep.
+  async listKits(
+    schoolId,
+    query = {},
+    { requireActive = false, applyPurchaseWindow = false, viewerUserId = null } = {}
+  ) {
     const filter = { ...notDeleted };
     if (schoolId && schoolId !== 'all') filter.schoolId = schoolId;
 
@@ -136,8 +158,36 @@ const kitsService = {
     if (query.category) filter.category = query.category;
     if (query.search) filter.name = { $regex: query.search.trim(), $options: 'i' };
 
+    // The admin's kit sale window. Resolved for every caller — parents have kits
+    // filtered by it, schools and admins are only told about it — and cheap
+    // enough to always ask for, since the setting is cached in-process.
+    const window = await getKitPurchaseWindow();
+    const openCondition = applyPurchaseWindow ? openWindowCondition(window) : null;
+    if (openCondition) {
+      // A kit the parent already bought stays visible after its window closes.
+      // It's part of their procurement progress and their order history, and
+      // dropping it would silently shrink the "X of Y kits purchased"
+      // denominator under them. The window only takes away what they could
+      // still have bought.
+      const purchasedKitIds =
+        viewerUserId && schoolId && schoolId !== 'all'
+          ? await this.listPurchasedKitIds(viewerUserId, schoolId)
+          : [];
+      filter.$or = purchasedKitIds.length
+        ? [openCondition, { _id: { $in: purchasedKitIds } }]
+        : [openCondition];
+    }
+
     const result = await executePaginatedQuery(Kit, filter, effectiveQuery, { defaultSort: '-audit.createdAt' });
     if (result.data && result.data.length) {
+      // Grabbed before populate() swaps schoolId for the School document —
+      // getCoverageCounts needs the raw id to scope a student roster by.
+      const kitScopes = result.data.map((k) => ({
+        _id: k._id,
+        schoolId: k.schoolId,
+        classGrade: k.classGrade,
+      }));
+
       result.data = await Kit.populate(result.data, [
         { path: 'schoolId', select: 'name schoolRefNo code logoUrl address' },
         { path: 'vendorId', select: 'storeName businessName name phone email' },
@@ -145,17 +195,25 @@ const kitsService = {
         { path: 'items.masterProductId', select: 'name category subcategory imageUrl productType' }
       ]);
 
-      // Sales counts are only meaningful to whoever is managing the kit
-      // (school/super admin) — parents and vendors browsing the catalogue
-      // don't need or get this.
+      // Sales and coverage figures are only meaningful to whoever is managing
+      // the kit (school/super admin) — parents and vendors browsing the
+      // catalogue don't need or get this.
       if (!requireActive) {
-        const kitIds = result.data.map((k) => k._id);
-        const counts = await this.getSalesCounts(kitIds);
+        const [sales, coverage] = await Promise.all([
+          this.getSalesCounts(kitScopes.map((k) => k._id)),
+          this.getCoverageCounts(kitScopes),
+        ]);
         result.data = result.data.map((k) => ({
           ...k,
-          salesCount: counts.get(String(k._id)) || 0,
+          salesCount: sales.get(String(k._id)) || 0,
+          coverage: coverage.get(String(k._id)) || EMPTY_COVERAGE,
         }));
       }
+
+      // Everyone gets the sale-window state: parents count down to it, and the
+      // school needs to know when one of its kits stopped being purchasable —
+      // otherwise a kit goes quiet on them with no explanation.
+      result.data = result.data.map((k) => decorateKitWindow(k, window));
     }
     return result;
   },
@@ -174,7 +232,79 @@ const kitsService = {
     return new Map(rows.map((r) => [String(r._id), r.count]));
   },
 
-  async getKit(schoolId, kitId, { requireActive = false } = {}) {
+  // "How many of the students this kit is for still haven't got it" — the
+  // number a school actually acts on, batched across a whole page of kits
+  // instead of one report request each.
+  //
+  // Scoping deliberately mirrors getKitPurchaseReport exactly (same class
+  // filter, same definition of a purchase), so the count on the list and the
+  // names inside the report can never disagree.
+  async getCoverageCounts(kits) {
+    const rows = (kits || []).filter((k) => k?._id);
+    if (!rows.length) return new Map();
+
+    const kitIds = rows.map((k) => k._id);
+    const schoolIds = [...new Set(rows.map((k) => String(k.schoolId || '')).filter(Boolean))];
+
+    const [children, orders] = await Promise.all([
+      schoolIds.length
+        ? ChildProfile.find({ schoolId: { $in: schoolIds }, ...notDeleted })
+            .select('schoolId grade parentUserId')
+            .lean()
+        : [],
+      Order.find({
+        'items.kitId': { $in: kitIds },
+        orderStatus: { $nin: ['cancelled', 'returned'] },
+      })
+        .select('userId items.kitId')
+        .lean(),
+    ]);
+
+    // Orders are per-parent, not per-child, so coverage is measured the only
+    // way the data allows: a parent who bought the kit covers every eligible
+    // child of theirs. Same caveat as the detailed report.
+    const buyersByKit = new Map(kitIds.map((id) => [String(id), new Set()]));
+    orders.forEach((order) => {
+      const parentId = String(order.userId || '');
+      if (!parentId) return;
+      (order.items || []).forEach((item) => {
+        const buyers = item.kitId && buyersByKit.get(String(item.kitId));
+        if (buyers) buyers.add(parentId);
+      });
+    });
+
+    const rosterBySchool = new Map();
+    children.forEach((child) => {
+      const key = String(child.schoolId);
+      if (!rosterBySchool.has(key)) rosterBySchool.set(key, []);
+      rosterBySchool.get(key).push(child);
+    });
+
+    return new Map(
+      rows.map((kit) => {
+        const roster = rosterBySchool.get(String(kit.schoolId)) || [];
+        // A kit with no target class is meant for every child at the school.
+        const eligible = kit.classGrade
+          ? roster.filter((child) => child.grade === kit.classGrade)
+          : roster;
+        const buyers = buyersByKit.get(String(kit._id)) || new Set();
+        const purchasedCount = eligible.filter((child) =>
+          buyers.has(String(child.parentUserId))
+        ).length;
+
+        return [
+          String(kit._id),
+          {
+            eligibleCount: eligible.length,
+            purchasedCount,
+            pendingCount: eligible.length - purchasedCount,
+          },
+        ];
+      })
+    );
+  },
+
+  async getKit(schoolId, kitId, { requireActive = false, applyPurchaseWindow = false, viewerUserId = null } = {}) {
     const filter = { _id: kitId, ...notDeleted };
     if (schoolId && schoolId !== 'all') filter.schoolId = schoolId;
     if (requireActive) filter.status = 'active';
@@ -186,13 +316,31 @@ const kitsService = {
       .populate({ path: 'items.masterProductId', select: 'name category subcategory imageUrl productType' })
       .lean();
     if (!kit) throw new NotFoundError('Kit not found', 'KIT_NOT_FOUND');
-    return kit;
+
+    const window = await getKitPurchaseWindow();
+    // Knowing (or guessing) a kit's id must not be a way around the sale
+    // window, so the detail route enforces it exactly like the list does —
+    // including the same escape hatch for a kit this parent already bought.
+    // Everyone else is told the deadline without being gated on it.
+    if (applyPurchaseWindow && !isKitPurchaseWindowOpen(kit, window)) {
+      const purchased = viewerUserId ? await this.hasPurchasedKit(viewerUserId, kit._id) : false;
+      if (!purchased) {
+        throw new NotFoundError(
+          'This kit is no longer available for purchase',
+          KIT_PURCHASE_WINDOW_CLOSED
+        );
+      }
+    }
+    return decorateKitWindow(kit, window);
   },
 
   async updateKit(schoolId, kitId, payload) {
     const update = { ...payload };
     delete update.slug;
     delete update.sku;
+    // Owned by this service, never by the caller — it is what the sale-window
+    // countdown is measured from.
+    delete update.publishedAt;
 
     const filter = { _id: kitId, ...notDeleted };
     if (schoolId && schoolId !== 'all') filter.schoolId = schoolId;
@@ -205,6 +353,14 @@ const kitsService = {
 
     const resolvedStatus = payload.status !== undefined ? payload.status : current.status;
     const goingLive = resolvedStatus === 'active';
+    // Publishing restarts the sale window. Editing a kit that was already live
+    // must not touch it, or a school could keep a closed kit on sale forever
+    // just by saving it again. Kits published before this field existed keep
+    // running off audit.createdAt (see kitPurchaseWindow.util.js) rather than
+    // being handed a fresh window here.
+    if (goingLive && current.status !== 'active') {
+      update.publishedAt = new Date();
+    }
     if (goingLive) {
       const resolvedVendor = payload.vendorId !== undefined ? payload.vendorId : current.vendorId;
       if (!resolvedVendor) {
@@ -323,6 +479,9 @@ const kitsService = {
         classGrade: kit.classGrade || null,
         pricePaise: kit.pricePaise,
         status: kit.status,
+        // Why the "not purchased" list may have stopped growing: once the sale
+        // window closes, nobody left on it can buy the kit any more.
+        purchaseWindow: decorateKitWindow(kit, await getKitPurchaseWindow()).purchaseWindow,
       },
       totalOrders: purchases.length,
       totalEligibleChildren: children.length,
@@ -379,6 +538,22 @@ const kitsService = {
       });
     });
     return [...purchased];
+  },
+
+  // Single-kit form of listPurchasedKitIds, for the kit detail page — which
+  // knows a kit id but not necessarily a school id, and only needs a yes/no.
+  // "Purchased" is defined identically to keep the two from ever disagreeing.
+  async hasPurchasedKit(userId, kitId) {
+    if (!userId || !kitId) return false;
+    const order = await Order.findOne({
+      userId,
+      orderStatus: { $nin: ['cancelled', 'returned'] },
+      $or: [{ paymentStatus: { $in: ['paid', 'authorized'] } }, { paymentMethod: 'cod' }],
+      items: { $elemMatch: { $or: [{ kitId }, { productId: kitId }] } },
+    })
+      .select('_id')
+      .lean();
+    return Boolean(order);
   },
 };
 

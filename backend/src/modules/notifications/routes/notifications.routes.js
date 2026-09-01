@@ -13,6 +13,12 @@ router.post(
   notificationsController.registerToken
 );
 
+router.post(
+  '/trigger-birthdays',
+  ...protectedRoute(),
+  notificationsController.triggerBirthdays
+);
+
 router.delete(
   '/tokens',
   ...protectedRoute(),

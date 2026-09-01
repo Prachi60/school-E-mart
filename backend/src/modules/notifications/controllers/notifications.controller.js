@@ -51,6 +51,13 @@ const notificationsController = {
     if (!deleted) throw new NotFoundError('Notification not found', 'NOTIFICATION_NOT_FOUND');
     return success(res, null, 'Notification deleted', undefined, req);
   }),
+
+  triggerBirthdays: asyncHandler(async (req, res) => {
+    const { triggerService } = require('../../../services/notification');
+    const targetDate = req.body?.date ? new Date(req.body.date) : new Date();
+    await triggerService.checkAndNotifyStudentBirthdays(targetDate);
+    return success(res, { triggeredAt: targetDate }, 'Birthday notifications processed', undefined, req);
+  }),
 };
 
 module.exports = notificationsController;

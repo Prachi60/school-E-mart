@@ -4,7 +4,7 @@ import {
   ArrowLeft, Check, ShoppingCart, 
   ShieldCheck, ChevronRight,
   Info, AlertCircle, Package, Truck,
-  Plus, X, Loader2, CheckCircle2
+  Plus, X, Loader2, CheckCircle2, Clock
 } from 'lucide-react';
 import { useCart } from '../../context/CartContext';
 import AuthPrompt from '../../components/AuthPrompt';
@@ -14,6 +14,7 @@ import { getErrorMessage } from '../../../utils/apiHelpers';
 import { mapProductForDetailView } from '../../../utils/mappers/productMapper';
 import { toAbsoluteUrl } from '../../../utils/url';
 import { resolveParentSchoolId } from '../../../hooks/useKitProcurementProgress';
+import KitSaleCountdown from '../../components/KitSaleCountdown';
 
 const KitDetailsPage = () => {
   const { kitId } = useParams();
@@ -26,6 +27,9 @@ const KitDetailsPage = () => {
   const [currentKitData, setCurrentKitData] = useState(null);
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [isPurchased, setIsPurchased] = useState(false);
+  // True once the admin's kit sale window has closed on this kit — either the
+  // API refused to serve it, or the countdown ran out while the page sat open.
+  const [saleClosed, setSaleClosed] = useState(false);
   // { [itemIndex]: { size, color } } — the parent's picks for items that offer
   // a choice. Required before the kit can be added to cart.
   const [selections, setSelections] = useState({});
@@ -71,23 +75,38 @@ const KitDetailsPage = () => {
         const schoolId = childInfo.schoolId;
 
         let rawKit = null;
+        // A kit whose sale window has closed 404s for this parent. That is a
+        // different story from "no such kit", and worth telling them plainly
+        // instead of falling through to a generic not-found.
+        let windowClosed = false;
 
         // Step 1: Try school kit API if schoolId exists
         if (schoolId) {
           try {
             rawKit = await getKit(schoolId, kitId);
-          } catch {
+          } catch (err) {
+            windowClosed = err?.response?.data?.code === 'KIT_PURCHASE_WINDOW_CLOSED';
             rawKit = null;
           }
         }
 
         // Step 2: Fallback query getKit with 'all' or listKits for matching kit _id
-        if (!rawKit) {
+        if (!rawKit && !windowClosed) {
           try {
             rawKit = await getKit('all', kitId);
-          } catch {
+          } catch (err) {
+            windowClosed = err?.response?.data?.code === 'KIT_PURCHASE_WINDOW_CLOSED';
             rawKit = null;
           }
+        }
+
+        if (windowClosed) {
+          if (!cancelled) {
+            setSaleClosed(true);
+            setCurrentKitData(null);
+            setLoading(false);
+          }
+          return;
         }
 
         if (!rawKit && schoolId) {
@@ -114,6 +133,9 @@ const KitDetailsPage = () => {
             mrp: rawKit.mrpPaise ? Math.round(rawKit.mrpPaise / 100) : (rawKit.mrp || 0),
             classes: rawKit.classGrade || rawKit.classes || '',
             category: rawKit.category || 'School Kit',
+            // Both null unless the admin has the kit sale window switched on.
+            saleStartsAt: rawKit.purchaseWindow?.startsAt || null,
+            saleEndsAt: rawKit.purchaseWindow?.endsAt || null,
             items: (rawKit.items || []).map((item, index) => {
               const pName = item.name || item.masterProductId?.name || `Item ${index + 1}`;
               const pImg = toAbsoluteUrl(item.imageUrl || item.masterProductId?.imageUrl || rawKit.imageUrl) || '';
@@ -248,7 +270,7 @@ const KitDetailsPage = () => {
   }, [currentKitData]);
 
   const handleAddToCart = async () => {
-    if (!currentKitData || isPurchased || addingToCart) return;
+    if (!currentKitData || isPurchased || addingToCart || saleClosed) return;
     if (isGuest) {
       setIsAuthPromptOpen(true);
       return;
@@ -298,6 +320,21 @@ const KitDetailsPage = () => {
       <div className="min-h-screen bg-[#F8F7FF] flex flex-col items-center justify-center font-outfit">
         <Loader2 size={32} className="animate-spin text-[#3b2d7d] mb-3" />
         <p className="text-sm font-bold text-gray-400">Loading kit details…</p>
+      </div>
+    );
+  }
+
+  if (saleClosed && !currentKitData) {
+    return (
+      <div className="min-h-screen bg-[#F8F7FF] flex flex-col items-center justify-center px-6 font-outfit text-center">
+        <Clock size={48} className="text-red-300 mb-4" />
+        <h2 className="text-lg font-black text-gray-900 mb-2">This kit is no longer on sale</h2>
+        <p className="text-xs text-gray-400 mb-6 font-medium max-w-xs">
+          Its purchase window has closed. Ask your school if you still need this kit for your child.
+        </p>
+        <button onClick={() => navigate(-1)} className="px-6 py-3 bg-[#3b2d7d] text-white rounded-2xl text-xs font-black uppercase tracking-wider">
+          Go Back
+        </button>
       </div>
     );
   }
@@ -352,6 +389,18 @@ const KitDetailsPage = () => {
                 <CheckCircle2 size={18} className="text-emerald-600 shrink-0 stroke-[2.5]" />
                 <span>You have already purchased this kit for your child.</span>
               </div>
+            )}
+            {/* Only worth pressuring a parent who can still act on it. Once the
+                countdown hits zero the kit stops being orderable here too, so
+                the CTA below flips rather than failing at the cart. */}
+            {!isPurchased && currentKitData.saleEndsAt && (
+              <KitSaleCountdown
+                startsAt={currentKitData.saleStartsAt}
+                endsAt={currentKitData.saleEndsAt}
+                variant="banner"
+                className="mt-4"
+                onExpire={() => setSaleClosed(true)}
+              />
             )}
             <div className="bg-purple-50/60 rounded-2xl p-4 border border-purple-100/80 flex items-center justify-between mt-3">
               <div>
@@ -485,7 +534,7 @@ const KitDetailsPage = () => {
             </button>
           </div>
         )}
-        {!buyError && missingSelections && !isPurchased && (
+        {!buyError && missingSelections && !isPurchased && !saleClosed && (
           <div className="max-w-md mx-auto mb-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 font-bold text-xs flex items-center gap-2 shadow-2xs">
             <AlertCircle size={16} className="text-amber-500 shrink-0" />
             <span>Select a size and color for every item above to continue.</span>
@@ -499,11 +548,13 @@ const KitDetailsPage = () => {
 
           <button
             type="button"
-            disabled={isPurchased || addingToCart || missingSelections}
+            disabled={isPurchased || addingToCart || missingSelections || saleClosed}
             onClick={handleAddToCart}
             className={`px-6 py-3.5 font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg flex items-center gap-2 transition-all active:scale-95 ${
               isPurchased
                 ? 'bg-emerald-600 text-white opacity-90 cursor-not-allowed shadow-emerald-900/10'
+                : saleClosed
+                ? 'bg-gray-400 text-white cursor-not-allowed'
                 : addingToCart
                 ? 'bg-[#3b2d7d]/80 text-white cursor-wait'
                 : missingSelections
@@ -520,6 +571,11 @@ const KitDetailsPage = () => {
               <>
                 <CheckCircle2 size={16} className="stroke-[2.5]" />
                 <span>Already Purchased</span>
+              </>
+            ) : saleClosed ? (
+              <>
+                <Clock size={16} />
+                <span>Sale Closed</span>
               </>
             ) : (
               <>

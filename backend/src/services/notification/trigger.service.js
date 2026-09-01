@@ -22,7 +22,7 @@ const normalizeSectionValue = (value) =>
     .trim();
 
 const notifySafe = (fn, ...args) => {
-  Promise.resolve()
+  return Promise.resolve()
     .then(() => fn(...args))
     .catch((error) => {
       logger.error('Notification trigger failed', {
@@ -880,6 +880,221 @@ const triggerService = {
             route: '/school/parent/attendance',
           },
         });
+      }
+    });
+  },
+
+  checkAndNotifyStudentBirthdays(targetDate = new Date()) {
+    return notifySafe(async () => {
+      const mongoose = require('mongoose');
+      if (mongoose.connection.readyState !== 1) {
+        logger.warn('Skipping birthday notification check: MongoDB connection not ready');
+        return;
+      }
+
+      const Student = require('../../database/models/Student');
+      const ChildProfile = require('../../database/models/ChildProfile');
+      const ParentProfile = require('../../database/models/ParentProfile');
+      const TeacherProfile = require('../../database/models/TeacherProfile');
+      const User = require('../../database/models/User');
+      const Notification = require('../../database/models/Notification');
+
+      const dateObj = new Date(targetDate);
+      const month = dateObj.getMonth() + 1;
+      const day = dateObj.getDate();
+      const utcMonth = dateObj.getUTCMonth() + 1;
+      const utcDay = dateObj.getUTCDate();
+
+      const isBirthdayToday = (dobDate) => {
+        if (!dobDate) return false;
+        const d = new Date(dobDate);
+        if (isNaN(d.getTime())) return false;
+        const m = d.getMonth() + 1;
+        const dy = d.getDate();
+        const um = d.getUTCMonth() + 1;
+        const udy = d.getUTCDate();
+        return (m === month && dy === day) || (um === utcMonth && udy === utcDay) || (m === utcMonth && dy === utcDay) || (um === month && udy === day);
+      };
+
+      // Find active Students whose DOB month and day match today
+      const allStudents = await Student.find({
+        dob: { $ne: null },
+        status: 'active',
+        'softDelete.isDeleted': { $ne: true },
+      }).lean();
+
+      const students = allStudents.filter((s) => isBirthdayToday(s.dob));
+
+      // Also find active ChildProfiles whose DOB month and day match today
+      const allChildren = await ChildProfile.find({
+        dob: { $ne: null },
+        'softDelete.isDeleted': { $ne: true },
+      }).lean();
+
+      const children = allChildren.filter((c) => isBirthdayToday(c.dob));
+
+      // Combine student candidates
+      const candidates = [];
+      const seenStudentKeys = new Set();
+
+      for (const s of students) {
+        const key = String(s._id);
+        seenStudentKeys.add(key);
+        candidates.push({
+          studentId: s._id,
+          name: s.name,
+          schoolId: s.schoolId,
+          classGrade: s.classGrade,
+          section: s.section,
+          parentProfileIds: s.parentProfileIds || [],
+          parentUserId: null,
+        });
+      }
+
+      for (const c of children) {
+        const key = c.studentId ? String(c.studentId) : `child_${c._id}`;
+        if (!seenStudentKeys.has(key)) {
+          seenStudentKeys.add(key);
+          candidates.push({
+            studentId: c.studentId || c._id,
+            name: c.name,
+            schoolId: c.schoolId,
+            classGrade: c.grade,
+            section: null,
+            parentProfileIds: [],
+            parentUserId: c.parentUserId || null,
+          });
+        }
+      }
+
+      if (!candidates.length) return;
+
+      const startOfDay = new Date(dateObj);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(dateObj);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      for (const candidate of candidates) {
+        const studentIdStr = String(candidate.studentId);
+
+        // Deduplication check: skip if birthday notification already sent today for this student
+        const alreadySent = await Notification.exists({
+          'payload.data.type': 'birthday',
+          'payload.data.studentId': studentIdStr,
+          createdAt: { $gte: startOfDay, $lte: endOfDay },
+        });
+
+        if (alreadySent) continue;
+
+        const studentName = candidate.name || 'Student';
+        const classGrade = candidate.classGrade || '';
+        const section = candidate.section || '';
+        const classLabel = classGrade
+          ? section
+            ? `Class ${classGrade} - ${section}`
+            : `Class ${classGrade}`
+          : 'Class';
+
+        // 1. Resolve Parent User IDs using helper
+        const parentsMap = await parentUserIdsByStudent([candidate.studentId]);
+        const parentUserIds = parentsMap.get(studentIdStr) || new Set();
+        if (candidate.parentUserId) {
+          parentUserIds.add(String(candidate.parentUserId));
+        }
+
+        // 2. Resolve Class Teacher User ID (isClassTeacher: true only!)
+        const teacherUserIds = new Set();
+        if (candidate.schoolId && candidate.classGrade) {
+          const teachers = await TeacherProfile.find({
+            schoolId: candidate.schoolId,
+            approvalStatus: 'approved',
+            'softDelete.isDeleted': { $ne: true },
+          }).lean();
+
+          teachers.forEach((teacher) => {
+            const isClassTeacher = (teacher.classAssignments || []).some((assignment) => {
+              if (!assignment.isClassTeacher) return false;
+              const classMatches =
+                assignment.class &&
+                String(assignment.class).trim().toLowerCase() === String(candidate.classGrade).trim().toLowerCase();
+              if (!classMatches) return false;
+              if (candidate.section && assignment.section) {
+                return String(assignment.section).trim().toLowerCase() === String(candidate.section).trim().toLowerCase();
+              }
+              return true;
+            });
+
+            if (isClassTeacher && teacher.userId) {
+              teacherUserIds.add(String(teacher.userId));
+            }
+          });
+        }
+
+        // 3. Resolve School Admin User IDs
+        const schoolAdminUserIds = new Set();
+        if (candidate.schoolId) {
+          const schoolAdmins = await User.find({
+            role: 'school',
+            tenantSchoolId: candidate.schoolId,
+            status: 'active',
+            'softDelete.isDeleted': { $ne: true },
+          })
+            .select('_id')
+            .lean();
+          schoolAdmins.forEach((sa) => schoolAdminUserIds.add(String(sa._id)));
+        }
+
+        // Send Notification to Parent(s)
+        const parentUserArr = Array.from(parentUserIds || []);
+        if (parentUserArr.length) {
+          await notificationService.sendToUsers(parentUserArr, {
+            type: 'event',
+            notification: {
+              title: `🎂 Happy Birthday ${studentName}!`,
+              body: `Wishing ${studentName} a very Happy Birthday! 🎉 May all their dreams come true!`,
+            },
+            data: {
+              type: 'birthday',
+              targetAudience: 'parent',
+              studentId: studentIdStr,
+              route: '/notifications',
+            },
+          });
+        }
+
+        // Send Notification to Class Teacher(s)
+        if (teacherUserIds.size) {
+          await notificationService.sendToUsers(Array.from(teacherUserIds), {
+            type: 'event',
+            notification: {
+              title: `🎂 Birthday Alert: ${studentName}`,
+              body: `Today is ${studentName}'s birthday (${classLabel}). Wish them a happy birthday! 🎉`,
+            },
+            data: {
+              type: 'birthday',
+              targetAudience: 'teacher',
+              studentId: studentIdStr,
+              route: '/notifications',
+            },
+          });
+        }
+
+        // Send Notification to School Admin(s)
+        if (schoolAdminUserIds.size) {
+          await notificationService.sendToUsers(Array.from(schoolAdminUserIds), {
+            type: 'event',
+            notification: {
+              title: `🎂 Student Birthday Alert: ${studentName}`,
+              body: `Today is ${studentName}'s birthday (${classLabel}). 🎉`,
+            },
+            data: {
+              type: 'birthday',
+              targetAudience: 'school',
+              studentId: studentIdStr,
+              route: '/notifications',
+            },
+          });
+        }
       }
     });
   },

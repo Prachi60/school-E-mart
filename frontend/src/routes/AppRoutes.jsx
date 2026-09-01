@@ -151,6 +151,7 @@ const PlatformTutorialsManagement = React.lazy(() => import('../app/features/sup
 const LMSManagement = React.lazy(() => import('../app/features/superadmin/LMSManagement'));
 const PromoHomeBanners = React.lazy(() => import('../app/features/superadmin/PromoHomeBanners'));
 const BillingChargesManagement = React.lazy(() => import('../app/features/superadmin/BillingChargesManagement'));
+const KitSaleWindowManagement = React.lazy(() => import('../app/features/superadmin/KitSaleWindowManagement'));
 const AdminProfileManagement = React.lazy(() => import('../app/features/superadmin/AdminProfileManagement'));
 const KitProductsManagement = React.lazy(() => import('../app/features/superadmin/KitProductsManagement'));
 const SchoolKitsManagement = React.lazy(() => import('../app/features/superadmin/SchoolKitsManagement'));
@@ -255,6 +256,7 @@ const AppRoutes = () => {
           <Route path="lms" element={<LMSManagement />} />
           <Route path="promo-home-banners" element={<PromoHomeBanners />} />
           <Route path="setting-billing-charges" element={<BillingChargesManagement />} />
+          <Route path="setting-kit-sale-window" element={<KitSaleWindowManagement />} />
           <Route path="contact-us-settings" element={<ContactManagement />} />
           <Route path="profile" element={<AdminProfileManagement />} />
           <Route path="kit-products" element={<KitProductsManagement />} />
