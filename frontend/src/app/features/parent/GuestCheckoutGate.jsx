@@ -21,6 +21,9 @@ const GuestCheckoutGate = ({ onDone, onCancel }) => {
   const [step, setStep] = useState('details'); // 'details' | 'otp'
   const [form, setForm] = useState({ name: '', phone: '', address: '', city: '', state: '', pinCode: '' });
   const [otp, setOtp] = useState('');
+  // Set only when the server has OTP verification switched off (OTP_ENABLED=false):
+  // it sends no SMS and returns the fixed code so the field can be filled in.
+  const [otpBypassed, setOtpBypassed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -35,7 +38,11 @@ const GuestCheckoutGate = ({ onDone, onCancel }) => {
     }
     setBusy(true);
     try {
-      await authApi.requestCustomerOtp(form.phone);
+      const result = await authApi.requestCustomerOtp(form.phone);
+      if (result?.otpBypassed && result.otp) {
+        setOtp(String(result.otp).slice(0, 4));
+        setOtpBypassed(true);
+      }
       setStep('otp');
     } catch (err) {
       setError(getErrorMessage(err, 'Could not send OTP. Please try again.'));
@@ -138,7 +145,11 @@ const GuestCheckoutGate = ({ onDone, onCancel }) => {
         ) : (
           <>
             <h2 className="text-lg font-black text-deep-purple">Verify your number</h2>
-            <p className="text-[11px] font-bold text-gray-400 mt-0.5">Enter the 4-digit code sent to +91 {form.phone}.</p>
+            <p className="text-[11px] font-bold text-gray-400 mt-0.5">
+              {otpBypassed
+                ? 'Verification is off, so the code is filled in for you.'
+                : `Enter the 4-digit code sent to +91 ${form.phone}.`}
+            </p>
 
             <input
               className="w-full mt-5 py-4 px-4 bg-gray-50 border-2 border-gray-100 rounded-2xl text-center text-2xl font-black tracking-[0.5em] text-deep-purple outline-none focus:border-primary/30"

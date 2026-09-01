@@ -16,6 +16,16 @@ const parseDurationMs = (value, fallbackMs) => {
   return amount * multipliers[unit];
 };
 
+// Absent, empty or unrecognised all fall back to `fallback`. Only the listed
+// spellings turn a flag off, so a typo can never silently disable a protection.
+const parseBool = (value, fallback) => {
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  return fallback;
+};
+
 const parseList = (value, fallback = []) => {
   if (!value) return fallback;
   return String(value)
@@ -84,9 +94,24 @@ const buildEnv = () => {
   OTP_IP_MAX_PER_WINDOW: Number(process.env.OTP_IP_MAX_PER_WINDOW) || 60,
 
   OTP_WINDOW_MS: Number(process.env.OTP_WINDOW_MS) || 15 * 60_000,
-  // OTPs are always randomly generated and always delivered over SMS. There is
-  // deliberately no bypass code: one would be a login-as-anyone hole the moment
-  // NODE_ENV was not production.
+
+  /**
+   * OTP_ENABLED=false turns off real one-time passcodes: no SMS is sent, every OTP
+   * becomes OTP_BYPASS_CODE, and the API hands that code back so the client can fill
+   * the field in for the user.
+   *
+   * Understand what this is before switching it off. It is not "relaxed" login — it
+   * is *no* login check at all: anyone who knows a registered phone number can sign
+   * in as that person and read their child's records. It exists for demos and for
+   * local work where no SMS gateway is wired up. It must never be false on a
+   * deployment holding real families' data.
+   *
+   * Defaults to true, and an unrecognised value also resolves to true, so a missing
+   * or fat-fingered variable can only ever leave real OTPs switched on.
+   */
+  OTP_ENABLED: parseBool(process.env.OTP_ENABLED, true),
+  OTP_BYPASS_CODE: String(process.env.OTP_BYPASS_CODE || '123456').replace(/\D/g, '') || '123456',
+
   SMS_PROVIDER: process.env.SMS_PROVIDER || 'smsindiahub',
   SMS_TIMEOUT_MS: Number(process.env.SMS_TIMEOUT_MS) || 15_000,
   SMS_ENTITY_NAME: process.env.SMS_ENTITY_NAME || 'School E-Mart',
@@ -190,11 +215,28 @@ const validateEnv = (config) => {
       }
     });
 
-    if (!config.SMSINDIAHUB_API_KEY || !config.SMSINDIAHUB_SENDER_ID) {
+    if (config.OTP_ENABLED && (!config.SMSINDIAHUB_API_KEY || !config.SMSINDIAHUB_SENDER_ID)) {
       throw new Error(
         'SMSINDIAHUB_API_KEY and SMSINDIAHUB_SENDER_ID are required in production: without them no OTP can be delivered'
       );
     }
+  }
+
+  // Deliberately a warning, not a throw: a production demo build is a real use for
+  // this. But it turns phone login into no check at all, so it must be impossible to
+  // leave on by accident without it being obvious in the logs at every boot.
+  if (!config.OTP_ENABLED) {
+    const banner = '='.repeat(72);
+    // eslint-disable-next-line no-console
+    console.warn(
+      `\n${banner}\n` +
+        `  OTP VERIFICATION IS DISABLED (OTP_ENABLED=false)\n` +
+        `  No SMS is sent. Every OTP is "${config.OTP_BYPASS_CODE}" and the API returns it\n` +
+        `  to the client, which fills it in automatically.\n` +
+        `  ANYONE WHO KNOWS A REGISTERED PHONE NUMBER CAN SIGN IN AS THAT PERSON.\n` +
+        `  Set OTP_ENABLED=true before this serves real users.\n` +
+        `${banner}\n`
+    );
   }
 };
 

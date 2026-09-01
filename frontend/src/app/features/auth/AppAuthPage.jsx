@@ -17,6 +17,11 @@ const AppAuthPage = () => {
   const [contactValue, setContactValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Only ever set when the server has OTP verification switched off
+  // (OTP_ENABLED=false): it sends no SMS and returns the fixed code so the field can
+  // be filled in for the user. With OTP on, the response carries no code and this
+  // stays empty.
+  const [prefilledOtp, setPrefilledOtp] = useState('');
 
   useEffect(() => {
     if (showSplash) {
@@ -44,7 +49,8 @@ const AppAuthPage = () => {
     setError('');
     setLoading(true);
     try {
-      await authApi.requestParentOtp(phone);
+      const result = await authApi.requestParentOtp(phone);
+      setPrefilledOtp(result?.otpBypassed ? result.otp || '' : '');
       setContactValue(phone);
       setStep(3);
     } catch (err) {
@@ -83,6 +89,7 @@ const AppAuthPage = () => {
         return (
           <Verification
             phone={contactValue}
+            prefilledOtp={prefilledOtp}
             onVerifyOtp={handleVerifyOtp}
             onError={setError}
             error={error}
@@ -213,10 +220,17 @@ const ContactInput = ({ onSendOtp, onError, error, loading }) => {
   );
 };
 
-const Verification = ({ phone, onVerifyOtp, onResendOtp, onError, error, loading }) => {
-  const [value, setValue] = useState('');
+const Verification = ({ phone, prefilledOtp = '', onVerifyOtp, onResendOtp, onError, error, loading }) => {
+  const [value, setValue] = useState(prefilledOtp.slice(0, 4));
   const [timer, setTimer] = useState(60);
   const [resending, setResending] = useState(false);
+
+  // Fill the field when the server tells us OTP verification is off. Deliberately not
+  // auto-submitted: the person still presses Verify, so the flow they learn here is
+  // the same one they will use once real OTPs are switched back on.
+  useEffect(() => {
+    if (prefilledOtp) setValue(prefilledOtp.slice(0, 4));
+  }, [prefilledOtp]);
 
   useEffect(() => {
     let interval = null;
@@ -265,7 +279,11 @@ const Verification = ({ phone, onVerifyOtp, onResendOtp, onError, error, loading
   return (
     <div className="animate-in fade-in slide-in-from-right-4 duration-500">
       <h2 className="text-2xl font-semibold text-deep-purple mb-2">Verify it's you</h2>
-      <p className="text-gray-400 text-sm mb-8">Enter the 4-digit code sent to <span className="font-semibold text-black">{phone || 'your phone'}</span></p>
+      <p className="text-gray-400 text-sm mb-8">
+        {prefilledOtp
+          ? <>Verification is off, so the code is filled in for you. Signing in as <span className="font-semibold text-black">{phone || 'your phone'}</span>.</>
+          : <>Enter the 4-digit code sent to <span className="font-semibold text-black">{phone || 'your phone'}</span></>}
+      </p>
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-3">
           <label className="block text-[13px] font-semibold text-black ml-1">OTP code</label>
