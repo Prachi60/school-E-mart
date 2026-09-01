@@ -80,6 +80,19 @@ export const mapAssignmentForParentHomework = (assignment, course, submission = 
     assignment?.bannerAttachmentId?.toString?.() ||
     null;
 
+  // The banner is an optional extra upload that teachers almost never use: on the live
+  // data only 4 of 82 homework rows carry one, while 80 carry image attachments. Keying
+  // the list thumbnail solely off the banner therefore left virtually every homework
+  // card with a placeholder icon, which is what parents report as "the homework images
+  // aren't showing". The photo of the work is already there — fall back to the first
+  // image attachment so the card shows it. Kept separate from `bannerAttachmentId` so
+  // the detail view's own banner slot still means "a real banner".
+  const firstImageAttachmentId =
+    (assignment?.attachments || [])
+      .filter((attachment) => String(attachment?.mime || '').startsWith('image/'))
+      .map((attachment) => attachment?._id?.toString?.() || attachment?.toString?.())
+      .find(Boolean) || null;
+
   const assignedDateValue = assignment?.assignedDate || assignment?.audit?.createdAt || assignment?.createdAt;
   const dueDateValue = assignment?.dueDate;
 
@@ -99,6 +112,8 @@ export const mapAssignmentForParentHomework = (assignment, course, submission = 
     description: assignment?.description || assignment?.instructions || assignment?.title,
     image: null,
     bannerAttachmentId,
+    // What the list card should actually load as its thumbnail.
+    thumbnailAttachmentId: bannerAttachmentId || firstImageAttachmentId,
     // Reflects what the teacher actually chose, not just how close the due date is.
     isHighPriority: priority === 'High' || status === 'Overdue' || status === 'Due Soon',
     priority,

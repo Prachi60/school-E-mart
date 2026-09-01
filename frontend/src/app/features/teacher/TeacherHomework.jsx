@@ -26,7 +26,12 @@ const TeacherHomework = () => {
   const location = useLocation();
   const schoolId = useTeacherSchoolId();
   const authUser = useAuthUser();
-  const { classLabels, getSections, getSubjects } = useTeacherClassOptions(schoolId);
+  const {
+    classLabels,
+    getSections,
+    getSubjects,
+    loading: optionsLoading,
+  } = useTeacherClassOptions(schoolId);
   const fileInputRef = React.useRef(null);
   const cameraFileInputRef = React.useRef(null);
 
@@ -215,8 +220,18 @@ const TeacherHomework = () => {
       setError('School context is missing. Please log in again.');
       return;
     }
+    // Distinguish "no class at all" from "class but no subject": they need different
+    // things from the school admin, and the old shared message named neither.
+    if (!selectedClass) {
+      setError(
+        'You are not assigned to any class yet. Ask your school admin to assign you a class and section.'
+      );
+      return;
+    }
     if (!subject) {
-      setError("You aren't assigned any subject for this class & section.");
+      setError(
+        `You aren't assigned any subject for ${selectedClass}${selectedSection ? ` / ${selectedSection}` : ''}. Ask your school admin to add one.`
+      );
       return;
     }
 
@@ -361,7 +376,21 @@ const TeacherHomework = () => {
             {error}
           </div>
         )}
-        
+
+        {/* A teacher with no class assignment gets an empty Class dropdown and a form
+            that refuses to save, with nothing saying why — so it reads as a broken app
+            and never gets reported to the school. On the live data this silently took a
+            whole school off the air: its only teacher had no assignment, so not one
+            piece of homework was ever published and every parent there saw an empty
+            page. Name the cause and who fixes it. */}
+        {!isEdit && !optionsLoading && classLabels.length === 0 && (
+          <div className="px-4 py-3 bg-amber-50 border border-amber-100 rounded-2xl text-[11px] font-bold text-amber-700">
+            You are not assigned to any class yet, so homework cannot be created. Ask your
+            school admin to assign you a class and section under Class &amp; Teacher
+            Assignments.
+          </div>
+        )}
+
         {/* 2. Class & Section Dropdown Selectors */}
         <div className="grid grid-cols-2 gap-4">
           {/* Class Dropdown */}
@@ -373,13 +402,20 @@ const TeacherHomework = () => {
               onClick={() => { setIsClassOpen(!isClassOpen); setIsSectionOpen(false); }}
               className={`w-full px-4 py-3.5 bg-white border border-gray-200 rounded-2xl text-left flex items-center justify-between shadow-sm transition-all ${isEdit ? 'opacity-60' : 'hover:border-primary/20 active:bg-gray-50'}`}
             >
-              <span className="text-xs font-black text-deep-purple">{selectedClass}</span>
+              <span className={`text-xs font-black ${selectedClass ? 'text-deep-purple' : 'text-gray-400'}`}>
+                {selectedClass || (optionsLoading ? 'Loading…' : 'No class assigned')}
+              </span>
               {isEdit ? <Lock size={12} className="text-gray-400" /> : <span className="text-gray-400 text-xs">▼</span>}
             </button>
             {isClassOpen && (
               <>
                 <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setIsClassOpen(false)} />
                 <div className="absolute left-0 right-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl z-50 py-1.5 animate-in fade-in slide-in-from-top-2 duration-200">
+                  {classes.length === 0 && (
+                    <p className="px-4 py-2.5 text-[11px] font-bold text-gray-400">
+                      No classes assigned to you yet.
+                    </p>
+                  )}
                   {classes.map(cls => (
                     <button 
                       key={cls}

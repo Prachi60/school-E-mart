@@ -241,8 +241,45 @@ const authController = {
     const normalizedPhone = normalizePhone(req.body.phone);
 
     const existingUser = await User.findOne({ phone: normalizedPhone, 'softDelete.isDeleted': { $ne: true } });
-    if (existingUser) {
+
+    /**
+     * A parent account can exist while its profile was never finished.
+     *
+     * Accounts created by the OTP login before it learned to refuse unknown numbers
+     * have no school and no child on them, so every parent screen — homework above all
+     * — renders empty. The app's own remedy ("Choose School" -> profile setup) lands
+     * here, and a flat PHONE_EXISTS made that a closed loop: they are already signed
+     * in, so "please log in instead" is advice they cannot act on. On the live database
+     * 27 of 193 parent accounts were stuck in exactly this state.
+     *
+     * So finish the profile instead of refusing — but only for the authenticated owner
+     * of that very account. Without the identity check this endpoint, which needs no
+     * credentials, would hand out a session for any phone number that is typed into it.
+     */
+    const isOwnAccount =
+      existingUser &&
+      req.auth?.userId &&
+      String(req.auth.userId) === String(existingUser._id) &&
+      existingUser.role === 'parent';
+
+    if (existingUser && !isOwnAccount) {
       throw new BadRequestError('Phone number already registered', null, 'PHONE_EXISTS');
+    }
+
+    // Already has a child on file: this is a re-submission, not an unfinished profile.
+    // Adding a second child is a different flow, so don't silently duplicate one here.
+    if (isOwnAccount) {
+      const alreadyHasChild = await ChildProfile.exists({
+        parentUserId: existingUser._id,
+        'softDelete.isDeleted': { $ne: true },
+      });
+      if (alreadyHasChild) {
+        throw new BadRequestError(
+          'Your profile is already set up',
+          null,
+          'PROFILE_ALREADY_SET_UP'
+        );
+      }
     }
 
     let school = null;
@@ -265,22 +302,44 @@ const authController = {
       }
     };
 
-    const refId = generateUserRefId('P');
-    const user = await User.create({
-      refId,
-      role: 'parent',
-      status: 'active',
-      name: `${req.body.studentName} Parent`,
-      phone: normalizedPhone,
-      phoneVerifiedAt: new Date(),
-      tenantSchoolId: school?._id || null,
-    });
+    let user;
+    if (isOwnAccount) {
+      // Finish the account that is already signed in. Its placeholder name ("Parent
+      // User", written by the old OTP login) is replaced, but a name the parent chose
+      // themselves is left alone.
+      const updates = { phoneVerifiedAt: existingUser.phoneVerifiedAt || new Date() };
+      if (school?._id) updates.tenantSchoolId = school._id;
+      if (!existingUser.name || existingUser.name === 'Parent User' || existingUser.name === 'Customer') {
+        updates.name = `${req.body.studentName} Parent`;
+      }
+      await User.updateOne({ _id: existingUser._id }, { $set: updates });
+      user = await User.findById(existingUser._id);
+    } else {
+      const refId = generateUserRefId('P');
+      user = await User.create({
+        refId,
+        role: 'parent',
+        status: 'active',
+        name: `${req.body.studentName} Parent`,
+        phone: normalizedPhone,
+        phoneVerifiedAt: new Date(),
+        tenantSchoolId: school?._id || null,
+      });
+    }
 
-    const referralCode = await generateUniqueReferralCode();
-    await ParentProfile.create({
+    // Guest-checkout and OTP-created accounts may already carry a ParentProfile; a
+    // second one would collide on the unique userId index.
+    const existingProfile = await ParentProfile.findOne({
       userId: user._id,
-      referralCode,
+      'softDelete.isDeleted': { $ne: true },
     });
+    if (!existingProfile) {
+      const referralCode = await generateUniqueReferralCode();
+      await ParentProfile.create({
+        userId: user._id,
+        referralCode,
+      });
+    }
 
     await ChildProfile.create({
       parentUserId: user._id,

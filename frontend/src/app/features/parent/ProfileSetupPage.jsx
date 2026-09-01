@@ -160,8 +160,10 @@ const ProfileSetupPage = () => {
 
       if (errorCode === 'VALIDATION_ERROR' && err.response?.data?.errors) {
         setErrors(prev => ({ ...prev, ...err.response.data.errors }));
+      } else if (errorCode === 'PROFILE_ALREADY_SET_UP') {
+        setErrors(prev => ({ ...prev, phone: 'Your profile is already set up. Pull down to refresh your home screen.' }));
       } else if (errorCode === 'PHONE_EXISTS') {
-        setErrors(prev => ({ ...prev, phone: 'This number is already registered. Please log in instead.' }));
+        setErrors(prev => ({ ...prev, phone: 'This number is already registered to another account. Please log in with it instead.' }));
       } else if (errorCode === 'PHONE_ALREADY_LINKED_TO_ANOTHER_STUDENT') {
         setErrors(prev => ({ ...prev, phone: 'This number is linked to another student. Use a different number for this child.' }));
       } else if (errorCode === 'INVALID_SCHOOL_REF') {

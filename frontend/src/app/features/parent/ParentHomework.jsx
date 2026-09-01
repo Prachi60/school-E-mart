@@ -88,9 +88,9 @@ const ParentHomework = () => {
       const mapped = await Promise.all(
         rows.map(async ({ assignment, course, submission }) => {
           const item = mapAssignmentForParentHomework(assignment, course, submission);
-          if (item.bannerAttachmentId) {
+          if (item.thumbnailAttachmentId) {
             try {
-              const url = await fetchSubmissionAttachment(schoolId, item.bannerAttachmentId);
+              const url = await fetchSubmissionAttachment(schoolId, item.thumbnailAttachmentId);
               nextBannerUrls.push(url);
               item.image = url;
             } catch {

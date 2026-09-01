@@ -65,11 +65,16 @@ userSchema.index(
     },
   }
 );
+// Same shape as the email index above. `sparse` must NOT be set alongside
+// partialFilterExpression: Mongo rejects the pair outright ("cannot mix
+// partialFilterExpression and sparse options"), which made this index un-buildable —
+// syncIndexes threw on User and the live constraint only exists because it was created
+// before the sparse flag was added. The partial filter already excludes rows with no
+// phone, so sparse was never adding anything.
 userSchema.index(
   { phone: 1 },
   {
     unique: true,
-    sparse: true,
     partialFilterExpression: {
       phone: { $type: 'string' },
       'softDelete.isDeleted': false,

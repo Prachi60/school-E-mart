@@ -2,7 +2,7 @@ const express = require('express');
 const authController = require('../controllers/auth.controller');
 const authValidators = require('../validators/auth.validator');
 const { validateBody, validateParams, validateQuery } = require('../../../middlewares/validation');
-const { protectedRoute } = require('../../../middlewares/auth/guards');
+const { protectedRoute, optionalAuthRoute } = require('../../../middlewares/auth/guards');
 const { authLimiter, otpLimiter } = require('../../../middlewares/rateLimit');
 const { ROLES } = require('../../../constants/roles');
 
@@ -73,9 +73,13 @@ router.post(
   authController.verifyParentOtp
 );
 
+// Optional auth: a brand-new parent has no token, while one finishing a profile on an
+// account that was auto-created for them is already signed in. registerParent only
+// adopts an existing account when the token proves it belongs to the caller.
 router.post(
   '/parent/register',
   authLimiter,
+  ...optionalAuthRoute(),
   validateBody(authValidators.parentRegisterSchema),
   authController.registerParent
 );

@@ -88,9 +88,21 @@ const tryRefreshToken = async () => {
   return refreshPromise;
 };
 
+/**
+ * Auth paths that are reachable signed out but must still carry the token when there
+ * is one. Parent registration doubles as "finish my profile" for an account that was
+ * created for the user by the OTP login: without the token the server cannot tell that
+ * the caller owns the number and refuses with PHONE_EXISTS, which is a dead end for
+ * someone who is already signed in.
+ *
+ * Kept separate from isUnauthenticatedAuthPath so the 401-refresh rules are unchanged.
+ */
+const ALWAYS_ATTACH_TOKEN_PATHS = new Set(['/auth/parent/register']);
+
 apiClient.interceptors.request.use(
   (config) => {
-    if (!isUnauthenticatedAuthPath(config.url || '')) {
+    const path = getRequestPath(config.url || '');
+    if (!isUnauthenticatedAuthPath(config.url || '') || ALWAYS_ATTACH_TOKEN_PATHS.has(path)) {
       const token = useAuthStore.getState().token;
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
