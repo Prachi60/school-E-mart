@@ -1,4 +1,5 @@
 import { toAbsoluteUrl } from '../url';
+import { attachmentFileName } from '../fileUpload';
 
 const SUBJECT_IMAGES = {
   Mathematics: '/assets/math_homework.png',
@@ -138,7 +139,7 @@ export const mapAssignmentForParentHomework = (assignment, course, submission = 
     attachmentsCount: assignment?.attachments?.length || 0,
     attachments: (assignment?.attachments || []).map((attachment, idx) => ({
       id: attachment?._id?.toString?.() || attachment?.toString?.(),
-      name: `Attachment ${idx + 1}`,
+      name: attachmentFileName(attachment?.mime, idx),
       mime: attachment?.mime || '',
       isImage: String(attachment?.mime || '').startsWith('image/'),
     })),
@@ -153,8 +154,9 @@ export const mapAssignmentForParentHomework = (assignment, course, submission = 
     submittedAt: submission?.submittedAt || null,
     isLate: Boolean(submission?.isLate),
     submittedNote: submission?.content || '',
-    submittedFiles: (submission?.attachments || []).map((attachment) => ({
+    submittedFiles: (submission?.attachments || []).map((attachment, idx) => ({
       id: attachment?._id?.toString?.() || attachment?.toString?.(),
+      name: attachmentFileName(attachment?.mime, idx),
       mime: attachment?.mime || '',
       isImage: String(attachment?.mime || '').startsWith('image/'),
     })),

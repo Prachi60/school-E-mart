@@ -585,7 +585,7 @@ const ParentHomeworkDetails = ({ homework, childInfo, canSubmit: isLinked = true
                   <input
                     type="file"
                     multiple
-                    accept=".png,.jpg,.jpeg,.webp"
+                    accept=".png,.jpg,.jpeg,.gif,.webp"
                     capture="environment"
                     onChange={handleFileChange}
                     className="hidden"
@@ -597,7 +597,7 @@ const ParentHomeworkDetails = ({ homework, childInfo, canSubmit: isLinked = true
                   <input
                     type="file"
                     multiple
-                    accept=".png,.jpg,.jpeg,.webp,.pdf,.doc,.docx"
+                    accept=".png,.jpg,.jpeg,.gif,.webp,.pdf"
                     onChange={handleFileChange}
                     className="hidden"
                   />

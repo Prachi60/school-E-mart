@@ -1,4 +1,5 @@
 import { toAbsoluteUrl } from '../url';
+import { attachmentFileName } from '../fileUpload';
 
 export const parseClassGrade = (label = '') => {
   const trimmed = String(label).trim();
@@ -116,7 +117,7 @@ export const mapAssignmentForHomework = (assignment, course) => ({
     null,
   attachments: (assignment?.attachments || []).map((attachment, idx) => ({
     id: attachment?._id?.toString?.() || attachment?.toString?.(),
-    name: `Attachment ${idx + 1}`,
+    name: attachmentFileName(attachment?.mime, idx),
     mime: attachment?.mime || '',
     isImage: String(attachment?.mime || '').startsWith('image/'),
   })),
@@ -155,7 +156,7 @@ export const mapRosterRowForCheck = ({ student, submission }) => {
   // linked to as a static URL.
   const files = (submission?.attachments || []).map((attachment, idx) => ({
     id: attachment?._id?.toString?.(),
-    name: `Attachment ${idx + 1}`,
+    name: attachmentFileName(attachment?.mime, idx),
     mime: attachment?.mime || '',
     isImage: String(attachment?.mime || '').startsWith('image/'),
     kind: attachment?.mime === 'application/pdf' ? 'pdf' : 'image',

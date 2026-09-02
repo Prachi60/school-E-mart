@@ -255,7 +255,7 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.85) =>
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept="image/*"
+            accept=".png,.jpg,.jpeg,.gif,.webp"
             className="hidden"
           />
           <input
@@ -263,7 +263,7 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.85) =>
             type="file"
             ref={cameraInputRef}
             onChange={handleFileChange}
-            accept="image/*"
+            accept=".png,.jpg,.jpeg,.gif,.webp"
             capture="user"
             className="hidden"
           />

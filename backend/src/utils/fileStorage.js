@@ -32,6 +32,13 @@ const EXTENSION_BY_MIME = {
   'application/pdf': 'pdf',
 };
 
+/**
+ * File extension (no dot) for a stored mime, or '' when we do not recognise it.
+ * Phones type a downloaded file by its extension rather than by sniffing its bytes, so
+ * anything that hands a file to a client needs this to build a usable filename.
+ */
+const extensionForMime = (mime) => EXTENSION_BY_MIME[String(mime || '').trim().toLowerCase()] || '';
+
 const ensureDir = (dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -134,6 +141,7 @@ const resolvePrivatePath = (storageKey) => {
 };
 
 module.exports = {
+  extensionForMime,
   saveBase64File,
   saveBase64Files,
   savePrivateBase64Files,

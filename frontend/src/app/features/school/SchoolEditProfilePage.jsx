@@ -260,8 +260,8 @@ const compressImage = (file, maxWidth = 800, maxHeight = 800, quality = 0.85) =>
         ) : (
         <>
         <div className="flex flex-col items-center gap-4">
-          <input id="gallery-input-school" type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-          <input id="camera-input-school" type="file" ref={cameraInputRef} onChange={handleFileChange} accept="image/*" capture="user" className="hidden" />
+          <input id="gallery-input-school" type="file" ref={fileInputRef} onChange={handleFileChange} accept=".png,.jpg,.jpeg,.gif,.webp" className="hidden" />
+          <input id="camera-input-school" type="file" ref={cameraInputRef} onChange={handleFileChange} accept=".png,.jpg,.jpeg,.gif,.webp" capture="user" className="hidden" />
           <div className="relative group">
             <div className="w-28 h-28 rounded-[2.5rem] bg-white p-1.5 shadow-xl border-2 border-primary/20">
               <div className="w-full h-full rounded-[2rem] bg-gray-100 overflow-hidden relative flex items-center justify-center">

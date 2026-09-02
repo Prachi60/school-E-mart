@@ -3,7 +3,7 @@ const { success, created, paginated } = require('../../../common/response');
 const asyncHandler = require('../../../utils/asyncHandler');
 const { ForbiddenError, NotFoundError } = require('../../../common/errors');
 const { ROLES } = require('../../../constants/roles');
-const { resolvePrivatePath } = require('../../../utils/fileStorage');
+const { resolvePrivatePath, extensionForMime } = require('../../../utils/fileStorage');
 const {
   assertCourseInSchool,
   assertTeacherCourseAccess,
@@ -468,9 +468,16 @@ const lmsController = {
       throw new NotFoundError('Attachment file is missing', 'ATTACHMENT_FILE_MISSING');
     }
 
+    // Phones type a downloaded file by its extension rather than by sniffing its bytes,
+    // so a response that names no file is saved without one and the gallery reports it
+    // as "Failed to load photo" / "File format isn't supported or files are corrupted".
+    // Attachments keep no original filename, so rebuild one from the stored mime.
+    const ext = extensionForMime(attachment.mime);
+    const downloadName = `attachment-${attachment._id}${ext ? `.${ext}` : ''}`;
+
     res.setHeader('Content-Type', attachment.mime);
     res.setHeader('Content-Length', attachment.sizeBytes);
-    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Content-Disposition', `inline; filename="${downloadName}"`);
     // Student work must never be held by a shared cache.
     res.setHeader('Cache-Control', 'private, no-store');
 

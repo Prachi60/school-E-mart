@@ -617,7 +617,7 @@ const SchoolSendNotice = () => {
                   <label className="px-3.5 py-2 rounded-xl border border-gray-200 hover:border-primary/40 cursor-pointer transition-colors bg-white text-[11px] font-black text-deep-purple flex items-center gap-1.5">
                     <Camera size={13} className="text-primary" />
                     <span>Take Photo</span>
-                    <input type="file" accept="image/*" capture="environment" onChange={handleFileUpload} className="hidden" disabled={uploadingFile} />
+                    <input type="file" accept=".png,.jpg,.jpeg,.gif,.webp" capture="environment" onChange={handleFileUpload} className="hidden" disabled={uploadingFile} />
                   </label>
                   <label className="px-3.5 py-2 rounded-xl border border-gray-200 hover:border-primary/40 cursor-pointer transition-colors bg-white text-[11px] font-black text-deep-purple flex items-center gap-1.5">
                     <Upload size={13} className="text-primary" />
