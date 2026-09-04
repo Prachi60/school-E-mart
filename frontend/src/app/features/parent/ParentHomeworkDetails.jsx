@@ -431,12 +431,16 @@ const ParentHomeworkDetails = ({ homework, childInfo, canSubmit: isLinked = true
                           </p>
                         </div>
                       </div>
+                      {/* No target="_blank" on the download link: the spec says
+                          `download` wins over `target`, but older Android browsers
+                          honour the target and open the blob in a viewer instead of
+                          saving it. Saving from that viewer names the file after the
+                          blob UUID, with no extension — which is what the gallery then
+                          refuses to open ("Failed to load photo"). */}
                       {url && (
                         <a
                           href={url}
                           download={file.name}
-                          target="_blank"
-                          rel="noreferrer"
                           className="w-8 h-8 rounded-xl bg-white border border-gray-100 flex items-center justify-center text-gray-400 hover:text-[#6A47DE] active:scale-95 transition-all shadow-sm shrink-0"
                         >
                           <Download size={13} />

@@ -149,7 +149,7 @@ const checkoutService = {
     }
 
     const platformFeePaise =
-      config.platformFeePaise != null && Number(config.platformFeePaise) > 0
+      config.platformFeePaise != null && Number(config.platformFeePaise) >= 0
         ? toNumber(config.platformFeePaise)
         : DEFAULT_PLATFORM_FEE_PAISE;
     const freeDeliveryThresholdPaise = toNumber(config.freeDeliveryThresholdPaise);
