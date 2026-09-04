@@ -43,7 +43,38 @@ const slugify = (value) =>
 
 const uniqueSuffix = () => crypto.randomBytes(3).toString('hex');
 
+/**
+ * The one definition of "this user already owns this kit".
+ *
+ * The kit page (display) and the cart/checkout guards (blocking) MUST ask the
+ * same question. When they drift, the page offers a kit as buyable and the buy
+ * then fails with "You have already purchased this kit." — which is exactly
+ * what an unpaid online order used to cause, because the guards matched any
+ * order that wasn't cancelled/returned while the page required real money.
+ *
+ * An order counts as a purchase only once its money is real: paid/authorized,
+ * or COD, where the courier collects on delivery so the kit is spoken for the
+ * moment the order is placed.
+ *
+ * `$elemMatch` matters: without it Mongo may satisfy `items.kitId` from one
+ * array element and `items.productId` from another, matching an order that
+ * contains neither as a single line.
+ */
+const purchasedKitOrderFilter = (userId, kitIds) => {
+  const ids = Array.isArray(kitIds) ? kitIds : [kitIds];
+  return {
+    userId,
+    orderStatus: { $nin: ['cancelled', 'returned'] },
+    $or: [{ paymentStatus: { $in: ['paid', 'authorized'] } }, { paymentMethod: 'cod' }],
+    items: {
+      $elemMatch: { $or: [{ kitId: { $in: ids } }, { productId: { $in: ids } }] },
+    },
+  };
+};
+
 const kitsService = {
+  purchasedKitOrderFilter,
+
   // Category management
   async listCategories(schoolId) {
     const custom = await SchoolKitCategory.find({ schoolId, ...notDeleted })
@@ -501,10 +532,9 @@ const kitsService = {
   // a plain `listOrders({limit: 100})` scan on the frontend would silently
   // miss an old kit purchase once a family crosses 100 orders.
   //
-  // "Purchased" mirrors cart.service.js's KIT_ALREADY_PURCHASED definition
-  // exactly: not cancelled/returned, and either already paid/authorized or
-  // COD (which reserves the kit the moment it's placed, before payment is
-  // actually collected).
+  // "Purchased" comes from purchasedKitOrderFilter above, which the cart and
+  // checkout KIT_ALREADY_PURCHASED guards also use, so the page and the guards
+  // cannot disagree.
   async listPurchasedKitIds(userId, schoolId) {
     const activeKits = await Kit.find({
       schoolId,
@@ -516,14 +546,7 @@ const kitsService = {
     const kitIds = activeKits.map((k) => k._id);
     if (!kitIds.length) return [];
 
-    const orders = await Order.find({
-      userId,
-      orderStatus: { $nin: ['cancelled', 'returned'] },
-      $or: [{ paymentStatus: { $in: ['paid', 'authorized'] } }, { paymentMethod: 'cod' }],
-      'items': {
-        $elemMatch: { $or: [{ kitId: { $in: kitIds } }, { productId: { $in: kitIds } }] },
-      },
-    })
+    const orders = await Order.find(purchasedKitOrderFilter(userId, kitIds))
       .select('items.kitId items.productId')
       .lean();
 
@@ -542,15 +565,9 @@ const kitsService = {
 
   // Single-kit form of listPurchasedKitIds, for the kit detail page — which
   // knows a kit id but not necessarily a school id, and only needs a yes/no.
-  // "Purchased" is defined identically to keep the two from ever disagreeing.
   async hasPurchasedKit(userId, kitId) {
     if (!userId || !kitId) return false;
-    const order = await Order.findOne({
-      userId,
-      orderStatus: { $nin: ['cancelled', 'returned'] },
-      $or: [{ paymentStatus: { $in: ['paid', 'authorized'] } }, { paymentMethod: 'cod' }],
-      items: { $elemMatch: { $or: [{ kitId }, { productId: kitId }] } },
-    })
+    const order = await Order.findOne(purchasedKitOrderFilter(userId, kitId))
       .select('_id')
       .lean();
     return Boolean(order);

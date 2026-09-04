@@ -167,14 +167,13 @@ const cartService = {
     }
 
     if (isKit) {
-      const Order = require('../../../database/models/Order');
-      const existingOrder = await Order.findOne({
-        userId,
-        orderStatus: { $nin: ['cancelled', 'returned'] },
-        $or: [{ 'items.productId': product._id }, { 'items.kitId': product._id }],
-      }).lean();
+      // Same definition of "already purchased" the kit page uses to decide
+      // whether to offer the kit at all — see kits.service.purchasedKitOrderFilter.
+      // Any divergence here shows the buyer a live Buy button that then fails.
+      const kitsService = require('../../academics/services/kits.service');
+      const alreadyPurchased = await kitsService.hasPurchasedKit(userId, product._id);
 
-      if (existingOrder) {
+      if (alreadyPurchased) {
         throw new BadRequestError('You have already purchased this kit.', null, 'KIT_ALREADY_PURCHASED');
       }
     }

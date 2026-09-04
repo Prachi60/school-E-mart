@@ -80,14 +80,12 @@ const orderService = {
       }
 
       if (kitIdsInOrder.length) {
-        const existingKitOrder = await Order.findOne({
-          userId,
-          orderStatus: { $nin: ['cancelled', 'returned'] },
-          $or: [
-            { 'items.kitId': { $in: kitIdsInOrder } },
-            { 'items.productId': { $in: kitIdsInOrder } },
-          ],
-        }).session(session).lean();
+        // Shared with the kit page and the cart guard so all three agree on what
+        // "already purchased" means — see kits.service.purchasedKitOrderFilter.
+        const kitsService = require('../../academics/services/kits.service');
+        const existingKitOrder = await Order.findOne(
+          kitsService.purchasedKitOrderFilter(userId, kitIdsInOrder)
+        ).session(session).lean();
 
         if (existingKitOrder) {
           throw new BadRequestError('You have already purchased this kit.', null, 'KIT_ALREADY_PURCHASED');

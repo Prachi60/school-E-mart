@@ -5,6 +5,7 @@ const taxonomyService = require('../../src/modules/marketplace/services/taxonomy
 const kitsService = require('../../src/modules/academics/services/kits.service');
 const VendorProfile = require('../../src/database/models/VendorProfile');
 const Kit = require('../../src/database/models/Kit');
+const Order = require('../../src/database/models/Order');
 
 describe('cartService', () => {
   let userId;
@@ -174,6 +175,94 @@ describe('cartService', () => {
       await expect(
         cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 })
       ).rejects.toMatchObject({ code: 'PRODUCT_NOT_FOUND' });
+    });
+
+    describe('already-purchased guard', () => {
+      const seedKitOrder = async (kitId, overrides) =>
+        Order.create({
+          orderNumber: `ORD${Date.now()}${Math.floor(Math.random() * 1000)}`,
+          userId,
+          audience: 'parent',
+          items: [{
+            productId: kitId,
+            kitId,
+            vendorId,
+            name: 'Class 5 Kit',
+            sku: `KIT-${kitId}`,
+            pricePaise: 50000,
+            mrpPaise: 50000,
+            quantity: 1,
+            taxPaise: 0,
+            lineTotalPaise: 50000,
+          }],
+          vendorIds: [vendorId],
+          subtotalPaise: 50000,
+          taxPaise: 0,
+          discountPaise: 0,
+          platformFeePaise: 0,
+          deliveryChargePaise: 0,
+          handlingChargePaise: 0,
+          totalPaise: 50000,
+          address: { line1: 'Test' },
+          deliveryType: 'home',
+          statusHistory: [{ status: 'placed', at: new Date() }],
+          placedAt: new Date(),
+          ...overrides,
+        });
+
+      const makeKit = () =>
+        kitsService.createKit(schoolId, {
+          name: 'Class 5 Kit', items: kitItems, status: 'active', vendorId, pricePaise: 50000,
+        });
+
+      test('a paid order blocks buying the same kit again', async () => {
+        const kit = await makeKit();
+        await seedKitOrder(kit._id, { paymentMethod: 'online', paymentStatus: 'paid', orderStatus: 'placed' });
+
+        await expect(
+          cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 })
+        ).rejects.toMatchObject({ code: 'KIT_ALREADY_PURCHASED' });
+      });
+
+      test('a COD order blocks buying the same kit again', async () => {
+        const kit = await makeKit();
+        await seedKitOrder(kit._id, { paymentMethod: 'cod', paymentStatus: 'pending', orderStatus: 'placed' });
+
+        await expect(
+          cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 })
+        ).rejects.toMatchObject({ code: 'KIT_ALREADY_PURCHASED' });
+      });
+
+      // Regression: an online order whose money never arrived is not a purchase.
+      // The kit page (hasPurchasedKit) has always agreed, so blocking here left
+      // the buyer staring at a live Buy button that failed every time.
+      test('an unpaid online order does NOT block buying the kit', async () => {
+        const kit = await makeKit();
+        await seedKitOrder(kit._id, { paymentMethod: 'online', paymentStatus: 'pending', orderStatus: 'placed' });
+
+        const cart = await cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 });
+        expect(cart.items).toHaveLength(1);
+        expect(await kitsService.hasPurchasedKit(userId, kit._id)).toBe(false);
+      });
+
+      test('the buy guard and the kit page always agree', async () => {
+        const kit = await makeKit();
+        await seedKitOrder(kit._id, { paymentMethod: 'online', paymentStatus: 'pending', orderStatus: 'delivered' });
+
+        // Page says not purchased, so adding to cart must succeed.
+        expect(await kitsService.hasPurchasedKit(userId, kit._id)).toBe(false);
+        await expect(
+          cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 })
+        ).resolves.toBeDefined();
+      });
+
+      test('a cancelled order never blocks', async () => {
+        const kit = await makeKit();
+        await seedKitOrder(kit._id, { paymentMethod: 'online', paymentStatus: 'paid', orderStatus: 'cancelled' });
+
+        const cart = await cartService.addItem(userId, 'parent', { productId: kit._id, quantity: 1 });
+        expect(cart.items).toHaveLength(1);
+      });
     });
   });
 });
