@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getCheckoutSummary } from '../services/ordersApi';
 import { getErrorMessage } from '../utils/apiHelpers';
 import {
@@ -21,6 +21,12 @@ export const useCheckoutSummary = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Key the fetch on the address *contents*, not the object's identity. Callers
+  // routinely build this inline or memoize it against a parent object, so
+  // depending on the reference re-fetched the summary on every render.
+  const addressKey = JSON.stringify(addressSource || {});
+  const stableAddressSource = useMemo(() => JSON.parse(addressKey), [addressKey]);
+
   useEffect(() => {
     if (!enabled || !cartItems.length) {
       setSummary(null);
@@ -35,7 +41,7 @@ export const useCheckoutSummary = ({
       buildCheckoutPayload({
         deliveryType,
         paymentMethod,
-        addressSource,
+        addressSource: stableAddressSource,
         schoolIdForPickup,
         gstin,
       }),
@@ -65,7 +71,7 @@ export const useCheckoutSummary = ({
     schoolIdForPickup,
     gstin,
     audience,
-    addressSource,
+    stableAddressSource,
   ]);
 
   return {

@@ -9,6 +9,9 @@ import QuantitySelector from '../../components/QuantitySelector';
 import useAuthStore from '../../../store/useAuthStore';
 import { useCheckoutSummary } from '../../../hooks/useCheckoutSummary';
 
+// Module-level so the reference stays stable across renders.
+const NO_ADDRESS = {};
+
 const CartPage = () => {
   const navigate = useNavigate();
   const { cartItems, updateQuantity, removeFromCart, totalQuantity, loading } = useCart();
@@ -27,7 +30,7 @@ const CartPage = () => {
   const { summary, totals, loading: summaryLoading } = useCheckoutSummary({
     deliveryType: 'home',
     paymentMethod: 'online',
-    addressSource: {},
+    addressSource: NO_ADDRESS,
     audience: 'parent',
     enabled: isAuthenticated && cartItems.length > 0,
   });

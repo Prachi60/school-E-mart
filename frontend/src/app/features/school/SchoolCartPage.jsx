@@ -1,18 +1,24 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { 
-  Trash2, ArrowLeft, ChevronRight, 
-  ShieldCheck, Truck, ShoppingCart, Minus, Plus, Building2 
+import {
+  Trash2, ArrowLeft, ChevronRight,
+  ShieldCheck, Truck, ShoppingCart, Minus, Plus, Building2
 } from 'lucide-react';
 import { useCart } from '../../context/CartContext';
 import QuantitySelector from '../../components/QuantitySelector';
+import { useCheckoutSummary } from '../../../hooks/useCheckoutSummary';
+import useAuthStore from '../../../store/useAuthStore';
+
+// Module-level so the reference stays stable across renders.
+const NO_ADDRESS = {};
 
 const SchoolCartPage = () => {
   const navigate = useNavigate();
   const { cartItems, updateQuantity, removeFromCart, totalQuantity, loading } = useCart();
   const [showRemoveToast, setShowRemoveToast] = useState(false);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
-  const subtotal = cartItems.reduce((sum, item) => {
+  const localSubtotal = cartItems.reduce((sum, item) => {
     if (item.pricePaise) return sum + (item.pricePaise / 100) * item.quantity;
     const price = typeof item.price === 'string'
       ? parseInt(item.price.replace('₹', '').replace(/,/g, ''), 10)
@@ -20,10 +26,24 @@ const SchoolCartPage = () => {
     return sum + (price * item.quantity);
   }, 0);
 
-  // Schools get free delivery and reduced fees for bulk
-  const deliveryFee = 0;
-  const platformFee = subtotal > 0 ? 50 : 0; 
-  const total = subtotal + deliveryFee + platformFee;
+  // Fees come from the admin's billing config via the server-authoritative
+  // checkout summary — never hardcoded here, or the cart would disagree with
+  // what SchoolCheckoutPage charges.
+  const { summary, totals, loading: summaryLoading } = useCheckoutSummary({
+    deliveryType: 'school',
+    paymentMethod: 'online',
+    addressSource: NO_ADDRESS,
+    audience: 'school',
+    enabled: isAuthenticated && cartItems.length > 0,
+  });
+
+  // `totals` is zero-filled until the summary actually arrives, so fall back to
+  // the item subtotal rather than showing ₹0 fees we haven't confirmed.
+  const hasSummary = Boolean(summary);
+  const subtotal = hasSummary ? totals.subtotal : localSubtotal;
+  const deliveryFee = hasSummary ? totals.deliveryCharge : 0;
+  const platformFee = hasSummary ? totals.platformFee : 0;
+  const total = hasSummary ? totals.grandTotal : localSubtotal;
 
   const handleRemove = (id) => {
     removeFromCart(id);
@@ -122,16 +142,25 @@ const SchoolCartPage = () => {
           </div>
           <div className="flex justify-between text-xs font-bold">
             <span className="text-gray-400">Institutional Delivery</span>
-            <span className="text-green-500 font-black">FREE</span>
+            <span className={deliveryFee === 0 ? 'text-green-500 font-black' : 'text-deep-purple'}>
+              {deliveryFee === 0 ? 'FREE' : `₹${deliveryFee.toLocaleString()}`}
+            </span>
           </div>
-          <div className="flex justify-between text-xs font-bold">
-            <span className="text-gray-400">Procurement Handling</span>
-            <span className="text-deep-purple">₹{platformFee}</span>
-          </div>
+          {platformFee > 0 && (
+            <div className="flex justify-between text-xs font-bold">
+              <span className="text-gray-400">Procurement Handling</span>
+              <span className="text-deep-purple">₹{platformFee.toLocaleString()}</span>
+            </div>
+          )}
           <div className="pt-4 border-t border-gray-50 flex justify-between items-center">
             <span className="text-sm font-black text-deep-purple">Final Amount</span>
             <span className="text-xl font-black text-primary">₹{total.toLocaleString()}</span>
           </div>
+          {!hasSummary && (
+            <p className="text-[10px] font-bold text-gray-300 text-center">
+              {summaryLoading ? 'Calculating…' : 'Charges calculated at checkout'}
+            </p>
+          )}
         </div>
       </div>
 
